@@ -1,0 +1,95 @@
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg-primary: #141414;
+  --bg-secondary: #1e1e1e;
+  --bg-card: #282828;
+  --bg-hover: #333333;
+  --border: #3a3a3a;
+  --text-primary: #e2e2e2;
+  --text-muted: #7a7a8a;
+  --accent: #e94560;
+  --accent-blue: #5b9bd5;
+  --kill-green: #4caf50;
+  --wipe-red: #e53935;
+
+  /* Pull rarity colors (matching xivodreview) */
+  --common: #9e9e9e;
+  --uncommon: #4caf50;
+  --rare: #2196f3;
+  --epic: #9c27b0;
+  --legendary: #ff9800;
+  --astounding: #f44336;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  overflow: hidden;
+}
+
+#app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+input, textarea {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  padding: 6px 10px;
+  font-size: 13px;
+  outline: none;
+}
+
+input:focus {
+  border-color: var(--accent-blue);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-secondary); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-blue); }
+
+/* Pull rarity */
+.rarity-common    { color: var(--common); }
+.rarity-uncommon  { color: var(--uncommon); }
+.rarity-rare      { color: var(--rare); }
+.rarity-epic      { color: var(--epic); }
+.rarity-legendary { color: var(--legendary); }
+.rarity-astounding { color: var(--astounding); }
+
+.kill-badge {
+  display: inline-block;
+  background: var(--kill-green);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}

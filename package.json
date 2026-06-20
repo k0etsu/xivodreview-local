@@ -1,0 +1,54 @@
+{
+  "name": "xivodreview",
+  "version": "0.0.1",
+  "description": "Local video + FFLogs raid review tool",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build && electron-builder",
+    "build:win": "electron-vite build && electron-builder --win",
+    "build:mac": "electron-vite build && electron-builder --mac",
+    "build:linux": "electron-vite build && electron-builder --linux",
+    "preview": "electron-vite preview"
+  },
+  "dependencies": {
+    "@electron-toolkit/tsconfig": "^2.0.0",
+    "@electron-toolkit/utils": "^4.0.0",
+    "electron-store": "^8.2.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.0.0",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.0.0",
+    "vue": "^3.4.0",
+    "vue-tsc": "^2.0.0"
+  },
+  "build": {
+    "appId": "com.xivodreview.local",
+    "productName": "xivodreview",
+    "icon": "resources/icon.png",
+    "files": [
+      "out/**/*",
+      "resources/**/*"
+    ],
+    "win": {
+      "target": "portable",
+      "icon": "resources/icon.png"
+    },
+    "mac": {
+      "target": {
+        "target": "dmg",
+        "arch": ["x64", "arm64"]
+      },
+      "icon": "resources/icon.png",
+      "category": "public.app-category.utilities"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "resources/icon.png",
+      "category": "Utility"
+    }
+  }
+}
