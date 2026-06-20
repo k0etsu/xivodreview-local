@@ -1,4 +1,17 @@
-# xivodreview-local
+<p align="center"><img src="https://raw.githubusercontent.com/k0etsu/xivodreview/master/app/public/logo.png" alt="logo" style="height: 10em; width: 10em"></p>
+<h1 align="center">xivodreview-local</h1>
+
+<p align="center">
+  <a href="https://github.com/k0etsu/xivodreview-local/releases/latest" title="Release">
+    <img src="https://img.shields.io/github/v/release/k0etsu/xivodreview-local" alt="Release">
+  </a>
+  <a href="https://github.com/k0etsu/xivodreview-local/blob/master/LICENSE" title="License">
+    <img src="https://img.shields.io/github/license/k0etsu/xivodreview-local" alt="License">
+  </a>
+  <a href="https://ko-fi.com/k0etsu" title="Ko-Fi" target="_blank">
+    <img src="https://img.shields.io/static/v1?label=donate&message=ko-fi&color=13C3FF&style=flat&logo=kofi">
+  </a>
+</p>
 
 A standalone desktop application for reviewing Final Fantasy XIV raid footage alongside FF Logs report data. A local-first port of [xivodreview](https://github.com/k0etsu/xivodreview) that plays local video files instead of Twitch or YouTube VODs, with no streaming platform authentication required.
 
