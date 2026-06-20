@@ -83,4 +83,4 @@ git tag v1.0.0 && git push origin v1.0.0
 
 ## License
 
-GPLv3 - see [LICENSE](LICENSE)
+AGPL-3.0 - see [LICENSE](LICENSE)
