@@ -54,7 +54,7 @@
         <FFlogsInput
           :loading="loadingReport"
           :error="reportError"
-          :saved-names="savedNames"
+          :saved-entries="savedEntries"
           :has-loaded="!!reportCode"
           @submit="loadReport"
           @reload="reloadAll"
@@ -85,6 +85,21 @@
     <SettingsPanel v-if="showSettings" @close="showSettings = false" />
     <HotkeyHelp v-if="showHotkeyHelp" @close="showHotkeyHelp = false" />
 
+    <div v-if="missingVideoPath" class="modal-overlay" @click.self="missingVideoPath = null">
+      <div class="modal-box">
+        <div class="modal-title">Video not found</div>
+        <div class="modal-body">
+          <p>The saved video file could not be found:</p>
+          <p class="modal-path">{{ missingVideoPath }}</p>
+          <p>The report and offset have been restored. You can locate the video manually.</p>
+        </div>
+        <div class="modal-actions">
+          <button class="modal-btn-primary" @click="() => { missingVideoPath = null; openVideo() }">Browse for video</button>
+          <button class="modal-btn" @click="missingVideoPath = null">Continue without video</button>
+        </div>
+      </div>
+    </div>
+
     <div class="hotkey-hint" @click="showHotkeyHelp = true">? · shortcuts</div>
   </div>
 </template>
@@ -105,6 +120,7 @@ import type { Fight, ReportData, DeathEvent, Actor, Ability, SavedEncounter } fr
 const player = ref<InstanceType<typeof VideoPlayer> | null>(null)
 const showSettings = ref(false)
 const showHotkeyHelp = ref(false)
+const missingVideoPath = ref<string | null>(null)
 
 const videoPath = ref<string | null>(null)
 const currentVideoTime = ref(0)
@@ -127,7 +143,24 @@ const savedEncounters = ref<Record<string, SavedEncounter>>({})
 
 // ─── Computed ─────────────────────────────────────────────────────────────────
 
-const savedNames = computed(() => Object.keys(savedEncounters.value))
+function formatReportDate(ts: number): string {
+  return new Date(ts).toLocaleString('en-US', {
+    month: 'numeric', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true
+  })
+}
+
+const savedEntries = computed(() =>
+  Object.entries(savedEncounters.value)
+    .map(([key, enc]) => ({
+      key,
+      label: enc.fightName && enc.reportStartTime
+        ? `${enc.fightName} · ${formatReportDate(enc.reportStartTime)}`
+        : enc.name,
+      reportStartTime: enc.reportStartTime ?? 0
+    }))
+    .sort((a, b) => b.reportStartTime - a.reportStartTime)
+)
 
 const enrichedFights = computed((): Fight[] => {
   if (!reportData.value) return []
@@ -268,7 +301,10 @@ async function saveEncounter() {
   savedEncounters.value[key] = {
     reportCode: reportCode.value,
     videoOffset: videoOffset.value,
-    name: key
+    name: key,
+    videoPath: videoPath.value ?? undefined,
+    fightName: reportData.value.fights[0]?.name ?? reportCode.value,
+    reportStartTime: reportData.value.startTime
   }
   await window.api.storeSet('savedEncounters', plainEncounters())
 }
@@ -277,6 +313,14 @@ async function loadSavedEncounter(name: string) {
   const enc = savedEncounters.value[name]
   if (!enc) return
   videoOffset.value = enc.videoOffset
+  if (enc.videoPath) {
+    const exists = await window.api.fileExists(enc.videoPath)
+    if (exists) {
+      videoPath.value = enc.videoPath
+    } else {
+      missingVideoPath.value = enc.videoPath
+    }
+  }
   await loadReport(enc.reportCode)
 }
 
@@ -531,4 +575,75 @@ onUnmounted(() => {
   z-index: 10;
 }
 .hotkey-hint:hover { opacity: 0.7; }
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-box {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 20px 24px;
+  max-width: 480px;
+  width: 90%;
+}
+
+.modal-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+}
+
+.modal-body {
+  font-size: 13px;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.modal-path {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--wipe-red);
+  word-break: break-all;
+  background: var(--bg-card);
+  padding: 6px 8px;
+  border-radius: 3px;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  justify-content: flex-end;
+}
+
+.modal-btn-primary {
+  background: var(--accent-blue);
+  color: #fff;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 4px;
+}
+.modal-btn-primary:hover { background: #5aa3e8; }
+
+.modal-btn {
+  background: var(--bg-card);
+  color: var(--text-muted);
+  padding: 6px 14px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.modal-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 </style>

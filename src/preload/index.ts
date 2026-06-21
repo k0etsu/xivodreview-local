@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('api', {
   fetchDeaths: (reportCode: string, startTime: number, endTime: number): Promise<unknown> =>
     ipcRenderer.invoke('fflogs:fetchDeaths', reportCode, startTime, endTime),
 
+  fileExists: (filePath: string): Promise<boolean> => ipcRenderer.invoke('fs:exists', filePath),
+
   storeGet: (key: string): Promise<unknown> => ipcRenderer.invoke('store:get', key),
   storeSet: (key: string, value: unknown): Promise<void> =>
     ipcRenderer.invoke('store:set', key, value),

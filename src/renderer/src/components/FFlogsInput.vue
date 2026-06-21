@@ -21,27 +21,32 @@
     <div v-if="error" class="error-msg">{{ error }}</div>
 
     <!-- Saved encounters -->
-    <div v-if="savedNames.length > 0" class="saved-section">
-      <div class="saved-label">Saved</div>
-      <div
-        v-for="name in savedNames"
-        :key="name"
-        class="saved-row"
-      >
-        <button class="saved-btn" @click="$emit('loadSaved', name)">{{ name }}</button>
-        <button class="del-btn" @click="$emit('deleteSaved', name)" title="Remove">✕</button>
+    <div v-if="hasSaved" class="saved-section">
+      <button class="saved-header" @click="savedCollapsed = !savedCollapsed">
+        <span class="saved-label">Saved ({{ savedEntries.length }})</span>
+        <span class="saved-chevron" :class="{ collapsed: savedCollapsed }">▾</span>
+      </button>
+      <div v-if="!savedCollapsed" class="saved-list">
+        <div
+          v-for="entry in savedEntries"
+          :key="entry.key"
+          class="saved-row"
+        >
+          <button class="saved-btn" @click="$emit('loadSaved', entry.key)" :title="entry.key">{{ entry.label }}</button>
+          <button class="del-btn" @click="$emit('deleteSaved', entry.key)" title="Remove">✕</button>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script lang="ts" setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 
 const props = defineProps<{
   loading: boolean
   error: string
-  savedNames: string[]
+  savedEntries: { key: string; label: string }[]
   hasLoaded: boolean
 }>()
 
@@ -53,6 +58,8 @@ const emit = defineEmits<{
 }>()
 
 const reportInput = ref('')
+const savedCollapsed = ref(false)
+const hasSaved = computed(() => props.savedEntries.length > 0)
 
 function extractCode(input: string): string {
   // Accept full URL like https://www.fflogs.com/reports/ABC123 or just the code
@@ -122,17 +129,40 @@ function submit() {
   margin-top: 10px;
 }
 
+.saved-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  background: transparent;
+  padding: 0;
+  margin-bottom: 4px;
+  cursor: pointer;
+}
+
 .saved-label {
   font-size: 11px;
   color: var(--text-muted);
-  margin-bottom: 4px;
+}
+
+.saved-chevron {
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+  line-height: 1;
+}
+.saved-chevron.collapsed { transform: rotate(-90deg); }
+
+.saved-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
 .saved-row {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-bottom: 3px;
 }
 
 .saved-btn {

@@ -125,6 +125,12 @@ const pullDuration = computed(() => fmt(pullDurationSec.value))
   font-size: 12px;
   flex-shrink: 0;
 }
+.offset-input::-webkit-inner-spin-button,
+.offset-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.offset-input { -moz-appearance: textfield; }
 
 .pull-time {
   font-size: 12px;

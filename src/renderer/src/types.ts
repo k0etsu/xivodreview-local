@@ -68,6 +68,9 @@ export interface SavedEncounter {
   reportCode: string
   videoOffset: number
   name: string
+  videoPath?: string
+  fightName?: string
+  reportStartTime?: number
 }
 
 declare global {
@@ -78,6 +81,7 @@ declare global {
       windowMaximize: () => Promise<void>
       windowClose: () => Promise<void>
       testCredentials: (clientId: string, clientSecret: string) => Promise<{ ok: boolean; error?: string }>
+      fileExists: (filePath: string) => Promise<boolean>
       fetchReport: (reportCode: string) => Promise<unknown>
       fetchDeaths: (reportCode: string, startTime: number, endTime: number) => Promise<unknown>
       storeGet: (key: string) => Promise<unknown>

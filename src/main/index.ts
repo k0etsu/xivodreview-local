@@ -1,5 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, protocol, net } from 'electron'
 import { join } from 'path'
+import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import Store from 'electron-store'
 import {
@@ -13,12 +14,21 @@ const store = new Store<{
   fflogsClientId: string
   fflogsClientSecret: string
   savedEncounters: Record<string, { offset: number; name: string }>
+  windowBounds: { x: number; y: number; width: number; height: number }
+  windowMaximized: boolean
+  windowFullScreen: boolean
 }>()
 
 function createWindow(): void {
+  const savedBounds = store.get('windowBounds') as { x: number; y: number; width: number; height: number } | undefined
+  const savedMaximized = store.get('windowMaximized') as boolean | undefined
+  const savedFullScreen = store.get('windowFullScreen') as boolean | undefined
+
   const mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    width: savedBounds?.width ?? 1440,
+    height: savedBounds?.height ?? 900,
+    x: savedBounds?.x,
+    y: savedBounds?.y,
     minWidth: 1100,
     minHeight: 700,
     backgroundColor: '#141414',
@@ -36,7 +46,18 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
+    if (savedFullScreen) {
+      mainWindow.setFullScreen(true)
+    } else if (savedMaximized) {
+      mainWindow.maximize()
+    }
     mainWindow.show()
+  })
+
+  mainWindow.on('close', () => {
+    store.set('windowBounds', mainWindow.getNormalBounds())
+    store.set('windowMaximized', mainWindow.isMaximized())
+    store.set('windowFullScreen', mainWindow.isFullScreen())
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -125,6 +146,9 @@ app.whenReady().then(() => {
       }
     }
   )
+
+  // IPC: check whether a file path exists on disk
+  ipcMain.handle('fs:exists', (_event, filePath: string) => existsSync(filePath))
 
   // IPC: electron-store access
   ipcMain.handle('store:get', (_event, key: string) => store.get(key))
