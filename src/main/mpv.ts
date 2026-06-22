@@ -121,7 +121,10 @@ export class MpvController extends EventEmitter {
 
   constructor(private mainWindow: BrowserWindow) {
     super()
-    this.pipeName = `\\\\.\\pipe\\xivodreview-${process.pid}`
+    // Windows: named pipe; macOS/Linux: Unix domain socket
+    this.pipeName = process.platform === 'win32'
+      ? `\\\\.\\pipe\\xivodreview-${process.pid}`
+      : `/tmp/xivodreview-${process.pid}.sock`
     this.ready = new Promise((res, rej) => {
       this.readyResolve = res
       this.readyReject = rej
@@ -154,6 +157,7 @@ export class MpvController extends EventEmitter {
     this.proc = spawn(mpvBin, [
       `--wid=${hwnd}`,
       `--input-ipc-server=${this.pipeName}`,
+      '--no-config',          // isolate from user's mpv.conf (af filters, profiles, etc.)
       '--no-terminal',
       '--no-osc',
       '--no-input-default-bindings',
@@ -162,8 +166,13 @@ export class MpvController extends EventEmitter {
       '--idle=yes',
       '--force-window=yes',
       '--vo=gpu',
-      '--gpu-api=d3d11',
-      '--hwdec=d3d11va-copy',
+      // D3D11 (the Windows default via --gpu-api=auto) uses DXGI's flip-model swap
+      // chain, which cannot present frames into an embedded child window (--wid) —
+      // only the window it owns. OpenGL (WGL) binds a context directly to any HWND,
+      // so it works correctly with --wid embedding. macOS and Linux use their default
+      // backends (Metal / Vulkan+OpenGL) which do not have this restriction.
+      ...(process.platform === 'win32' ? ['--gpu-api=opengl'] : []),
+      '--hwdec=auto',         // nvdec / d3d11va-copy / videotoolbox / vaapi — best available
     ])
 
     this.proc.on('error', (e: NodeJS.ErrnoException) => {
