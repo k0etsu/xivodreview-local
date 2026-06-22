@@ -89,6 +89,13 @@
         />
       </div>
 
+      <button
+        v-if="audioTrackCount > 1"
+        class="ctrl-btn audio-track-btn"
+        @click="cycleAudioTrack"
+        :title="`Cycle audio track (A) — ${currentAudioTrackIndex + 1}/${audioTrackCount}`"
+      >Audio {{ currentAudioTrackIndex + 1 }}/{{ audioTrackCount }}</button>
+
       <div class="spacer" />
 
       <slot name="controls-right" />
@@ -121,6 +128,8 @@ const currentTime = ref(0)
 const duration = ref(0)
 const volume = ref(1)
 const muted = ref(false)
+const audioTrackCount = ref(0)
+const currentAudioTrackIndex = ref(0)
 
 // Pull-relative scrub
 const pullStartSeconds = computed(() => {
@@ -164,6 +173,27 @@ function onTimeUpdate() {
 function onMetadata() {
   if (!videoEl.value) return
   duration.value = videoEl.value.duration
+  refreshAudioTracks()
+}
+
+function refreshAudioTracks() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tracks = (videoEl.value as any)?.audioTracks
+  if (!tracks) return
+  audioTrackCount.value = tracks.length
+  for (let i = 0; i < tracks.length; i++) {
+    if (tracks[i].enabled) { currentAudioTrackIndex.value = i; break }
+  }
+}
+
+function cycleAudioTrack() {
+  if (!videoEl.value) return
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tracks = (videoEl.value as any)?.audioTracks
+  if (!tracks || tracks.length <= 1) return
+  const next = (currentAudioTrackIndex.value + 1) % tracks.length
+  for (let i = 0; i < tracks.length; i++) tracks[i].enabled = i === next
+  currentAudioTrackIndex.value = next
 }
 
 function togglePlay() {
@@ -227,16 +257,22 @@ function formatTime(s: number): string {
 }
 
 // Reload the video file from disk (picks up new content if the file is still being written).
-// Saves the current playhead position and restores it after the metadata loads.
+// Saves the current playhead position and audio track, restores both after metadata loads.
+// Always leaves the player paused after reloading.
 function reloadVideo() {
   if (!videoEl.value || !props.src) return
   const savedTime = videoEl.value.currentTime
-  const wasPlaying = !videoEl.value.paused
+  const savedTrackIndex = currentAudioTrackIndex.value
 
   const onLoaded = () => {
     if (!videoEl.value) return
     videoEl.value.currentTime = savedTime
-    if (wasPlaying) videoEl.value.play()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tracks = (videoEl.value as any)?.audioTracks
+    if (tracks && tracks.length > 1) {
+      for (let i = 0; i < tracks.length; i++) tracks[i].enabled = i === savedTrackIndex
+      currentAudioTrackIndex.value = savedTrackIndex
+    }
     videoEl.value.removeEventListener('loadedmetadata', onLoaded)
   }
   videoEl.value.addEventListener('loadedmetadata', onLoaded)
@@ -280,6 +316,7 @@ defineExpose({
   adjustVolume,
   togglePlay,
   toggleMute,
+  cycleAudioTrack,
   getCurrentTime: () => videoEl.value?.currentTime ?? 0,
   reloadVideo
 })
@@ -455,6 +492,13 @@ onMounted(() => {
 }
 .volume-slider:hover::-webkit-slider-thumb { background: #fff; }
 .volume-slider::-webkit-slider-thumb:active { background: var(--accent-blue); }
+
+.audio-track-btn {
+  font-size: 11px;
+  padding: 2px 6px;
+  color: var(--text-muted);
+}
+.audio-track-btn:hover { color: var(--text-primary); }
 
 .spacer { flex: 1; }
 </style>

@@ -14,6 +14,7 @@
         <div class="row"><div class="keys"><kbd>Ctrl</kbd><span class="plus">+</span><kbd>←</kbd><kbd>→</kbd></div><span>Step one frame</span></div>
         <div class="row"><div class="keys"><kbd>↑</kbd><kbd>↓</kbd></div><span>Volume ±10%</span></div>
         <div class="row"><div class="keys"><kbd>M</kbd></div><span>Toggle mute</span></div>
+        <div class="row"><div class="keys"><kbd>A</kbd></div><span>Cycle audio track</span></div>
 
         <div class="section-label">Sync</div>
         <div class="row"><div class="keys"><kbd>[</kbd><kbd>]</kbd></div><span>Offset ±500 ms</span></div>

@@ -398,6 +398,9 @@ function onGlobalKey(e: KeyboardEvent) {
     case 'KeyM':
       player.value?.toggleMute()
       break
+    case 'KeyA':
+      player.value?.cycleAudioTrack()
+      break
 
     // ── Sync ──
     case 'BracketLeft':   // [
