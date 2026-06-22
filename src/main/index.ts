@@ -2,7 +2,10 @@ import { app, shell, BrowserWindow, ipcMain, dialog, protocol, net } from 'elect
 
 if (process.platform === 'win32') app.setAppUserModelId('com.xivodreview.local')
 import { join } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, unlinkSync } from 'fs'
+import { execFile, spawn } from 'child_process'
+import { tmpdir } from 'os'
+import { randomUUID } from 'crypto'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import Store from 'electron-store'
 import {
@@ -11,6 +14,9 @@ import {
   queryFFLogsReport,
   queryFFLogsDeaths
 } from './fflogs'
+
+// Temp files created when remuxing audio tracks; cleaned up on quit.
+const tempFiles = new Set<string>()
 
 const store = new Store<{
   fflogsClientId: string
@@ -147,6 +153,60 @@ app.whenReady().then(() => {
     }
   )
 
+  // IPC: probe audio tracks in a video file via ffprobe
+  ipcMain.handle('video:getAudioTracks', (_event, filePath: string) =>
+    new Promise<{ index: number; title: string; language: string }[]>((resolve, reject) => {
+      execFile(
+        'ffprobe',
+        ['-v', 'quiet', '-print_format', 'json', '-show_streams', '-select_streams', 'a', filePath],
+        { maxBuffer: 1024 * 1024 },
+        (err, stdout) => {
+          if (err) {
+            const code = (err as NodeJS.ErrnoException).code
+            return reject(new Error(code === 'ENOENT' ? 'ffprobe not found in PATH' : `ffprobe: ${err.message}`))
+          }
+          try {
+            const streams = (JSON.parse(stdout) as { streams: Record<string, unknown>[] }).streams
+            resolve(streams.map((s, i) => {
+              const tags = (s.tags ?? {}) as Record<string, string>
+              return {
+                index: i,
+                title: tags.title ?? tags.TITLE ?? `Track ${i + 1}`,
+                language: tags.language ?? tags.LANGUAGE ?? ''
+              }
+            }))
+          } catch (e) {
+            reject(new Error(`Failed to parse ffprobe output: ${e}`))
+          }
+        }
+      )
+    })
+  )
+
+  // IPC: remux video keeping only the specified audio track into a temp file
+  ipcMain.handle('video:remuxWithTrack', (_event, filePath: string, audioTrackIndex: number) =>
+    new Promise<string>((resolve, reject) => {
+      const tmpPath = join(tmpdir(), `xivodreview-${randomUUID()}.mkv`)
+      const proc = spawn('ffmpeg', [
+        '-y', '-i', filePath,
+        '-map', '0:v:0',
+        '-map', `0:a:${audioTrackIndex}`,
+        '-c', 'copy',
+        tmpPath
+      ])
+      let stderr = ''
+      proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
+      proc.on('error', (e: NodeJS.ErrnoException) =>
+        reject(new Error(e.code === 'ENOENT' ? 'ffmpeg not found in PATH' : e.message))
+      )
+      proc.on('close', (code) => {
+        if (code !== 0) return reject(new Error(`ffmpeg exited ${code}: ${stderr.slice(-400)}`))
+        tempFiles.add(tmpPath)
+        resolve(tmpPath)
+      })
+    })
+  )
+
   // IPC: check whether a file path exists on disk
   ipcMain.handle('fs:exists', (_event, filePath: string) => existsSync(filePath))
 
@@ -160,6 +220,10 @@ app.whenReady().then(() => {
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+app.on('will-quit', () => {
+  for (const f of tempFiles) { try { unlinkSync(f) } catch (_) {} }
 })
 
 app.on('window-all-closed', () => {

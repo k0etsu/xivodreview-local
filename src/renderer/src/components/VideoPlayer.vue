@@ -3,10 +3,9 @@
     <div class="video-container">
       <video
         ref="videoEl"
-        :src="src ? 'file:///' + src.replace(/\\/g, '/') : undefined"
+        :src="activeSrc ? 'file:///' + activeSrc.replace(/\\/g, '/') : undefined"
         @timeupdate="onTimeUpdate"
         @loadedmetadata="onMetadata"
-        @canplay="refreshAudioTracks"
         @play="playing = true"
         @pause="playing = false"
         @ended="playing = false"
@@ -91,11 +90,12 @@
       </div>
 
       <button
-        v-if="audioTrackCount > 1"
+        v-if="audioTracks.length > 1"
         class="ctrl-btn audio-track-btn"
         @click="cycleAudioTrack"
-        :title="`Cycle audio track (A) — ${currentAudioTrackIndex + 1}/${audioTrackCount}`"
-      >Audio {{ currentAudioTrackIndex + 1 }}/{{ audioTrackCount }}</button>
+        :disabled="audioTrackLoading"
+        :title="audioTrackLoading ? 'Switching audio track…' : `Cycle audio track (A) — ${currentAudioTrackIndex + 1}/${audioTracks.length}`"
+      >{{ audioTrackLoading ? '…' : `Audio ${currentAudioTrackIndex + 1}/${audioTracks.length}` }}</button>
 
       <div class="spacer" />
 
@@ -105,7 +105,7 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import type { DeathEvent, Fight } from '../types'
 
 const props = defineProps<{
@@ -129,8 +129,15 @@ const currentTime = ref(0)
 const duration = ref(0)
 const volume = ref(1)
 const muted = ref(false)
-const audioTrackCount = ref(0)
+
+// activeSrc is what the <video> element actually plays. Normally equals props.src,
+// but switches to a temp-remuxed file when the user cycles audio tracks.
+const activeSrc = ref<string | null>(props.src)
+
+interface AudioTrack { index: number; title: string; language: string }
+const audioTracks = ref<AudioTrack[]>([])
 const currentAudioTrackIndex = ref(0)
+const audioTrackLoading = ref(false)
 
 // Pull-relative scrub
 const pullStartSeconds = computed(() => {
@@ -174,27 +181,38 @@ function onTimeUpdate() {
 function onMetadata() {
   if (!videoEl.value) return
   duration.value = videoEl.value.duration
-  refreshAudioTracks()
 }
 
-function refreshAudioTracks() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tracks = (videoEl.value as any)?.audioTracks
-  if (!tracks) return
-  audioTrackCount.value = tracks.length
-  for (let i = 0; i < tracks.length; i++) {
-    if (tracks[i].enabled) { currentAudioTrackIndex.value = i; break }
+async function loadAudioTracks(filePath: string) {
+  try {
+    audioTracks.value = await window.api.getAudioTracks(filePath)
+  } catch {
+    audioTracks.value = []
   }
 }
 
-function cycleAudioTrack() {
-  if (!videoEl.value) return
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tracks = (videoEl.value as any)?.audioTracks
-  if (!tracks || tracks.length <= 1) return
-  const next = (currentAudioTrackIndex.value + 1) % tracks.length
-  for (let i = 0; i < tracks.length; i++) tracks[i].enabled = i === next
-  currentAudioTrackIndex.value = next
+async function cycleAudioTrack() {
+  if (!props.src || audioTracks.value.length <= 1 || audioTrackLoading.value) return
+  const next = (currentAudioTrackIndex.value + 1) % audioTracks.value.length
+  const savedTime = videoEl.value?.currentTime ?? 0
+  audioTrackLoading.value = true
+  try {
+    const tmpPath = await window.api.remuxWithTrack(props.src, next)
+    activeSrc.value = tmpPath
+    currentAudioTrackIndex.value = next
+    await nextTick()
+    const onLoaded = () => {
+      if (!videoEl.value) return
+      videoEl.value.currentTime = savedTime
+      videoEl.value.removeEventListener('loadedmetadata', onLoaded)
+    }
+    videoEl.value?.addEventListener('loadedmetadata', onLoaded)
+    videoEl.value?.load()
+  } catch (err) {
+    console.error('Failed to switch audio track:', err)
+  } finally {
+    audioTrackLoading.value = false
+  }
 }
 
 function togglePlay() {
@@ -258,22 +276,16 @@ function formatTime(s: number): string {
 }
 
 // Reload the video file from disk (picks up new content if the file is still being written).
-// Saves the current playhead position and audio track, restores both after metadata loads.
-// Always leaves the player paused after reloading.
-function reloadVideo() {
+// Resets to the original file and default audio track. Always leaves the player paused.
+async function reloadVideo() {
   if (!videoEl.value || !props.src) return
   const savedTime = videoEl.value.currentTime
-  const savedTrackIndex = currentAudioTrackIndex.value
-
+  activeSrc.value = props.src
+  currentAudioTrackIndex.value = 0
+  await nextTick()
   const onLoaded = () => {
     if (!videoEl.value) return
     videoEl.value.currentTime = savedTime
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const tracks = (videoEl.value as any)?.audioTracks
-    if (tracks && tracks.length > 1) {
-      for (let i = 0; i < tracks.length; i++) tracks[i].enabled = i === savedTrackIndex
-      currentAudioTrackIndex.value = savedTrackIndex
-    }
     videoEl.value.removeEventListener('loadedmetadata', onLoaded)
   }
   videoEl.value.addEventListener('loadedmetadata', onLoaded)
@@ -322,38 +334,21 @@ defineExpose({
   reloadVideo
 })
 
-// When src changes to a new file, reset state and explicitly reload the element.
-// Vue updates the :src attribute reactively, but Electron doesn't always re-initiate
-// loading on its own — especially if the previous video was mid-play or in an error state.
 watch(() => props.src, async (newSrc) => {
   playing.value = false
   currentTime.value = 0
   duration.value = 0
-  audioTrackCount.value = 0
+  audioTracks.value = []
   currentAudioTrackIndex.value = 0
+  activeSrc.value = newSrc
   if (!videoEl.value || !newSrc) return
-  await nextTick()  // let Vue flush the new :src attribute to the DOM
+  await nextTick()
   videoEl.value.load()
-})
+  loadAudioTracks(newSrc)
+}, { immediate: true })
 
 onMounted(() => {
   wrapper.value?.focus()
-  // audioTracks may not be fully populated at loadedmetadata; also listen to addtrack
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tracks = (videoEl.value as any)?.audioTracks
-  if (tracks) {
-    tracks.addEventListener('addtrack', refreshAudioTracks)
-    tracks.addEventListener('removetrack', refreshAudioTracks)
-  }
-})
-
-onUnmounted(() => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const tracks = (videoEl.value as any)?.audioTracks
-  if (tracks) {
-    tracks.removeEventListener('addtrack', refreshAudioTracks)
-    tracks.removeEventListener('removetrack', refreshAudioTracks)
-  }
 })
 </script>
 
