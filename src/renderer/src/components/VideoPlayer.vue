@@ -185,8 +185,11 @@ function onMetadata() {
 
 async function loadAudioTracks(filePath: string) {
   try {
-    audioTracks.value = await window.api.getAudioTracks(filePath)
-  } catch {
+    const tracks = await window.api.getAudioTracks(filePath)
+    console.log('[AudioTracks]', tracks.length, 'track(s):', tracks)
+    audioTracks.value = tracks
+  } catch (err) {
+    console.error('[AudioTracks] probe failed:', err)
     audioTracks.value = []
   }
 }
@@ -209,7 +212,9 @@ async function cycleAudioTrack() {
     videoEl.value?.addEventListener('loadedmetadata', onLoaded)
     videoEl.value?.load()
   } catch (err) {
-    console.error('Failed to switch audio track:', err)
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[AudioTracks] switch failed:', msg)
+    alert(`Audio track switch failed: ${msg}`)
   } finally {
     audioTrackLoading.value = false
   }

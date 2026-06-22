@@ -3,9 +3,10 @@ import { app, shell, BrowserWindow, ipcMain, dialog, protocol, net } from 'elect
 if (process.platform === 'win32') app.setAppUserModelId('com.xivodreview.local')
 import { join } from 'path'
 import { existsSync, unlinkSync } from 'fs'
-import { execFile, spawn } from 'child_process'
+import { spawn } from 'child_process'
 import { tmpdir } from 'os'
 import { randomUUID } from 'crypto'
+import { probeAudioTracks } from './mediaprobe'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import Store from 'electron-store'
 import {
@@ -153,41 +154,30 @@ app.whenReady().then(() => {
     }
   )
 
-  // IPC: probe audio tracks in a video file via ffprobe
-  ipcMain.handle('video:getAudioTracks', (_event, filePath: string) =>
-    new Promise<{ index: number; title: string; language: string }[]>((resolve, reject) => {
-      execFile(
-        'ffprobe',
-        ['-v', 'quiet', '-print_format', 'json', '-show_streams', '-select_streams', 'a', filePath],
-        { maxBuffer: 1024 * 1024 },
-        (err, stdout) => {
-          if (err) {
-            const code = (err as NodeJS.ErrnoException).code
-            return reject(new Error(code === 'ENOENT' ? 'ffprobe not found in PATH' : `ffprobe: ${err.message}`))
-          }
-          try {
-            const streams = (JSON.parse(stdout) as { streams: Record<string, unknown>[] }).streams
-            resolve(streams.map((s, i) => {
-              const tags = (s.tags ?? {}) as Record<string, string>
-              return {
-                index: i,
-                title: tags.title ?? tags.TITLE ?? `Track ${i + 1}`,
-                language: tags.language ?? tags.LANGUAGE ?? ''
-              }
-            }))
-          } catch (e) {
-            reject(new Error(`Failed to parse ffprobe output: ${e}`))
-          }
-        }
-      )
-    })
-  )
+  // IPC: probe audio tracks — native parser, no external tools needed
+  ipcMain.handle('video:getAudioTracks', (_event, filePath: string) => {
+    return probeAudioTracks(filePath)
+  })
 
-  // IPC: remux video keeping only the specified audio track into a temp file
+  // IPC: remux video keeping only the specified audio track into a temp file (requires ffmpeg in PATH)
   ipcMain.handle('video:remuxWithTrack', (_event, filePath: string, audioTrackIndex: number) =>
     new Promise<string>((resolve, reject) => {
       const tmpPath = join(tmpdir(), `xivodreview-${randomUUID()}.mkv`)
-      const proc = spawn('ffmpeg', [
+
+      // Search common Windows install locations if ffmpeg isn't in PATH
+      const ffmpegCandidates = process.platform === 'win32'
+        ? [
+            'ffmpeg',
+            'C:\\ffmpeg\\bin\\ffmpeg.exe',
+            'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
+            join(process.env['USERPROFILE'] ?? '', 'scoop', 'apps', 'ffmpeg', 'current', 'bin', 'ffmpeg.exe'),
+            'C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe',
+          ].filter((p, i) => i === 0 || existsSync(p))
+        : ['ffmpeg']
+
+      const ffmpeg = ffmpegCandidates[ffmpegCandidates.length > 1 ? 1 : 0]
+
+      const proc = spawn(ffmpeg, [
         '-y', '-i', filePath,
         '-map', '0:v:0',
         '-map', `0:a:${audioTrackIndex}`,
@@ -197,7 +187,7 @@ app.whenReady().then(() => {
       let stderr = ''
       proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
       proc.on('error', (e: NodeJS.ErrnoException) =>
-        reject(new Error(e.code === 'ENOENT' ? 'ffmpeg not found in PATH' : e.message))
+        reject(new Error(e.code === 'ENOENT' ? 'ffmpeg not found — install it and add to PATH' : e.message))
       )
       proc.on('close', (code) => {
         if (code !== 0) return reject(new Error(`ffmpeg exited ${code}: ${stderr.slice(-400)}`))
