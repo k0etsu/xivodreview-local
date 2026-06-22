@@ -1,10 +1,22 @@
 <template>
   <div class="video-wrapper" tabindex="-1" ref="wrapper">
 
-    <!-- mpv renders into the native child window positioned over this div.
-         The div is a transparent click target; clicks pass through from the
-         mpv window (setIgnoreMouseEvents + forward) to here. -->
+    <!-- Video area:
+         mpv mode  — transparent click target; native child window sits on top.
+         html5 mode — contains a real <video> element. -->
     <div class="video-container" ref="videoArea" @click="togglePlay">
+      <video
+        v-if="backend === 'html5' && src"
+        ref="videoEl"
+        :src="src"
+        class="html5-video"
+        preload="auto"
+        @timeupdate="onHtmlTime"
+        @durationchange="onHtmlDuration"
+        @play="playing = true"
+        @pause="playing = false"
+        @loadedmetadata="onHtmlFileLoaded"
+      />
       <div v-if="!src" class="video-placeholder" @click.stop="$emit('openFile')">
         <div class="placeholder-inner">
           <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -78,9 +90,9 @@
         />
       </div>
 
-      <!-- Audio track selector — only shown when mpv reports multiple audio tracks -->
+      <!-- Audio track selector — mpv only, shown when multiple tracks detected -->
       <button
-        v-if="audioTracks.length > 1"
+        v-if="backend === 'mpv' && audioTracks.length > 1"
         class="ctrl-btn audio-track-btn"
         @click="cycleAudioTrack"
         :title="`Cycle audio track (A) — ${currentAudioTrackIndex + 1}/${audioTracks.length}`"
@@ -97,6 +109,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import type { DeathEvent, Fight } from '../types'
 
 const props = defineProps<{
+  backend: 'mpv' | 'html5'
   src: string | null
   currentPull: Fight | null
   deaths: DeathEvent[]
@@ -110,9 +123,10 @@ const emit = defineEmits<{
 
 // ─── Refs ─────────────────────────────────────────────────────────────────────
 
-const wrapper  = ref<HTMLDivElement | null>(null)
+const wrapper   = ref<HTMLDivElement | null>(null)
 const videoArea = ref<HTMLDivElement | null>(null)
-const scrubBar = ref<HTMLDivElement | null>(null)
+const scrubBar  = ref<HTMLDivElement | null>(null)
+const videoEl   = ref<HTMLVideoElement | null>(null)
 
 const playing     = ref(false)
 const currentTime = ref(0)
@@ -164,9 +178,9 @@ function reportBounds() {
 
 // ─── mpv event handlers ───────────────────────────────────────────────────────
 
-function onMpvTime(t: number)    { currentTime.value = t; emit('timeUpdate', t) }
+function onMpvTime(t: number)     { currentTime.value = t; emit('timeUpdate', t) }
 function onMpvDuration(d: number) { duration.value = d }
-function onMpvPause(p: boolean)  { playing.value = !p }
+function onMpvPause(p: boolean)   { playing.value = !p }
 function onMpvTracks(raw: unknown[]) {
   audioTracks.value = raw as AudioTrack[]
   const sel = audioTracks.value.findIndex(t => t.selected)
@@ -179,47 +193,93 @@ function onMpvFileLoaded() {
   }
 }
 
+// ─── HTML5 event handlers ─────────────────────────────────────────────────────
+
+function onHtmlTime() {
+  const t = videoEl.value?.currentTime ?? 0
+  currentTime.value = t
+  emit('timeUpdate', t)
+}
+function onHtmlDuration() { duration.value = videoEl.value?.duration ?? 0 }
+function onHtmlFileLoaded() {
+  duration.value = videoEl.value?.duration ?? 0
+  if (pendingSeek !== null) {
+    if (videoEl.value) videoEl.value.currentTime = pendingSeek
+    pendingSeek = null
+  }
+}
+
 // ─── Controls ─────────────────────────────────────────────────────────────────
 
 function togglePlay() {
   if (!props.src) return
-  window.api.mpvTogglePause().catch(() => {})
+  if (props.backend === 'html5') {
+    const v = videoEl.value
+    if (!v) return
+    v.paused ? v.play() : v.pause()
+  } else {
+    window.api.mpvTogglePause().catch(() => {})
+  }
 }
 
 function toggleMute() {
   muted.value = !muted.value
-  window.api.mpvSetMute(muted.value).catch(() => {})
+  if (props.backend === 'html5') {
+    if (videoEl.value) videoEl.value.muted = muted.value
+  } else {
+    window.api.mpvSetMute(muted.value).catch(() => {})
+  }
 }
 
 function onVolumeInput(e: Event) {
   const v = parseFloat((e.target as HTMLInputElement).value)
   volume.value = v
   muted.value = v === 0
-  window.api.mpvSetVolume(v).catch(() => {})
-  if (!muted.value) window.api.mpvSetMute(false).catch(() => {})
+  if (props.backend === 'html5') {
+    if (videoEl.value) { videoEl.value.volume = v; videoEl.value.muted = muted.value }
+  } else {
+    window.api.mpvSetVolume(v).catch(() => {})
+    if (!muted.value) window.api.mpvSetMute(false).catch(() => {})
+  }
 }
 
 function seekTo(seconds: number) {
-  window.api.mpvSeek(Math.max(0, seconds), 'absolute').catch(() => {})
+  if (props.backend === 'html5') {
+    if (videoEl.value) videoEl.value.currentTime = Math.max(0, seconds)
+  } else {
+    window.api.mpvSeek(Math.max(0, seconds), 'absolute').catch(() => {})
+  }
 }
 
 function seekBy(delta: number) {
-  window.api.mpvSeek(delta, 'relative').catch(() => {})
+  if (props.backend === 'html5') {
+    if (videoEl.value) videoEl.value.currentTime = Math.max(0, videoEl.value.currentTime + delta)
+  } else {
+    window.api.mpvSeek(delta, 'relative').catch(() => {})
+  }
 }
 
 function stepFrame(direction: 1 | -1) {
-  if (direction > 0) window.api.mpvFrameStep().catch(() => {})
-  else               window.api.mpvFrameBackStep().catch(() => {})
+  // Frame stepping is mpv-only; no-op in HTML5 mode
+  if (props.backend === 'mpv') {
+    if (direction > 0) window.api.mpvFrameStep().catch(() => {})
+    else               window.api.mpvFrameBackStep().catch(() => {})
+  }
 }
 
 function adjustVolume(delta: number) {
   const next = Math.max(0, Math.min(1, volume.value + delta))
   volume.value = next
   muted.value = next === 0
-  window.api.mpvAddVolume(delta).catch(() => {})
+  if (props.backend === 'html5') {
+    if (videoEl.value) { videoEl.value.volume = next; videoEl.value.muted = muted.value }
+  } else {
+    window.api.mpvAddVolume(delta).catch(() => {})
+  }
 }
 
 function cycleAudioTrack() {
+  // mpv-only
   if (audioTracks.value.length <= 1) return
   const next = (currentAudioTrackIndex.value + 1) % audioTracks.value.length
   const track = audioTracks.value[next]
@@ -233,7 +293,11 @@ function cycleAudioTrack() {
 function reloadVideo() {
   if (!props.src) return
   pendingSeek = currentTime.value
-  window.api.mpvOpenFile(props.src).catch(() => {})
+  if (props.backend === 'html5') {
+    videoEl.value?.load()
+  } else {
+    window.api.mpvOpenFile(props.src).catch(() => {})
+  }
 }
 
 // ─── Scrub bar interaction ────────────────────────────────────────────────────
@@ -272,7 +336,8 @@ watch(() => props.src, (newSrc) => {
   playing.value = false
   audioTracks.value = []
   currentAudioTrackIndex.value = 0
-  if (newSrc) window.api.mpvOpenFile(newSrc).catch(() => {})
+  // HTML5: :src binding on <video> triggers load automatically
+  if (newSrc && props.backend === 'mpv') window.api.mpvOpenFile(newSrc).catch(() => {})
 })
 
 // ─── Lifecycle ────────────────────────────────────────────────────────────────
@@ -282,26 +347,26 @@ let resizeObserver: ResizeObserver | null = null
 onMounted(() => {
   wrapper.value?.focus()
 
-  // Subscribe to mpv events
-  window.api.mpvOnTimeUpdate(onMpvTime)
-  window.api.mpvOnDuration(onMpvDuration)
-  window.api.mpvOnPause(onMpvPause)
-  window.api.mpvOnTracks(onMpvTracks as (t: unknown[]) => void)
-  window.api.mpvOnFileLoaded(onMpvFileLoaded)
+  if (props.backend === 'mpv') {
+    window.api.mpvOnTimeUpdate(onMpvTime)
+    window.api.mpvOnDuration(onMpvDuration)
+    window.api.mpvOnPause(onMpvPause)
+    window.api.mpvOnTracks(onMpvTracks as (t: unknown[]) => void)
+    window.api.mpvOnFileLoaded(onMpvFileLoaded)
 
-  // Report bounds now and whenever the container resizes
-  reportBounds()
-  resizeObserver = new ResizeObserver(reportBounds)
-  if (videoArea.value) resizeObserver.observe(videoArea.value)
-
-  // Also update on window resize (catches fullscreen / snap layout changes)
-  window.addEventListener('resize', reportBounds)
+    reportBounds()
+    resizeObserver = new ResizeObserver(reportBounds)
+    if (videoArea.value) resizeObserver.observe(videoArea.value)
+    window.addEventListener('resize', reportBounds)
+  }
 })
 
 onUnmounted(() => {
-  window.api.mpvOffAll()
-  resizeObserver?.disconnect()
-  window.removeEventListener('resize', reportBounds)
+  if (props.backend === 'mpv') {
+    window.api.mpvOffAll()
+    resizeObserver?.disconnect()
+    window.removeEventListener('resize', reportBounds)
+  }
 })
 
 // ─── Public API (called by App.vue) ──────────────────────────────────────────
@@ -328,8 +393,15 @@ defineExpose({
   height: 100%;
 }
 
-/* This div is a layout placeholder only — mpv's native window sits on top of it.
-   Clicks pass through from the mpv window (setIgnoreMouseEvents+forward) to here. */
+.html5-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* mpv mode: layout placeholder only — native window sits on top.
+   html5 mode: contains the <video> element. */
 .video-container {
   flex: 1;
   position: relative;

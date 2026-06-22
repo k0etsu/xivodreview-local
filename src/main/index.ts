@@ -61,13 +61,15 @@ function createWindow(): void {
 
   // ─── mpv setup ─────────────────────────────────────────────────────────────
 
-  const mpv = new MpvController(mainWindow)
+  const playerBackend = store.get('playerBackend', 'mpv') as 'mpv' | 'html5'
+  const mpv = playerBackend === 'mpv' ? new MpvController(mainWindow) : null
 
   // Viewport-relative bounds of the video-container div sent by the renderer.
   // Combined with mainWindow.getContentBounds() to get absolute screen position.
   let vpBounds = { left: 0, top: 38, width: 100, height: 100 }
 
   function updateMpvBounds() {
+    if (!mpv) return
     const cb = mainWindow.getContentBounds()
     mpv.setVideoBounds(
       cb.x + vpBounds.left,
@@ -77,32 +79,31 @@ function createWindow(): void {
     )
   }
 
-  mainWindow.on('move',     updateMpvBounds)
-  mainWindow.on('resize',   updateMpvBounds)
-  // Keep mpv on top only while this app is focused so it doesn't float
-  // above unrelated applications when the user switches away.
-  // Hide mpv's window when the main window is minimized/restored.
-  mainWindow.on('minimize', () => mpv.hideVideo())
-  mainWindow.on('restore',  () => updateMpvBounds())
+  mainWindow.on('move',   updateMpvBounds)
+  mainWindow.on('resize', updateMpvBounds)
 
-  // Launch mpv eagerly — should be connected before the user opens a file
-  mpv.launch(getMpvBin())
-    .then(() => {
-      console.log('[mpv] ready')
-      // Wire up events → renderer
-      mpv.on('timeUpdate',    (t) => mainWindow.webContents.send('mpv:timeUpdate', t))
-      mpv.on('durationChange',(d) => mainWindow.webContents.send('mpv:durationChange', d))
-      mpv.on('pauseChange',   (p) => {
-        mainWindow.webContents.send('mpv:pauseChange', p)
-        // Clicking the video area gives focus to mpv's window.
-        // Return it to the main window so keyboard hotkeys keep working.
-        if (!mainWindow.isFocused()) mainWindow.focus()
+  if (mpv) {
+    mainWindow.on('minimize', () => mpv.hideVideo())
+    mainWindow.on('restore',  () => updateMpvBounds())
+
+    // Launch mpv eagerly — should be connected before the user opens a file
+    mpv.launch(getMpvBin())
+      .then(() => {
+        console.log('[mpv] ready')
+        mpv.on('timeUpdate',    (t) => mainWindow.webContents.send('mpv:timeUpdate', t))
+        mpv.on('durationChange',(d) => mainWindow.webContents.send('mpv:durationChange', d))
+        mpv.on('pauseChange',   (p) => {
+          mainWindow.webContents.send('mpv:pauseChange', p)
+          // Clicking the video area gives focus to mpv's window.
+          // Return it to the main window so keyboard hotkeys keep working.
+          if (!mainWindow.isFocused()) mainWindow.focus()
+        })
+        mpv.on('tracksChange',  (t) => mainWindow.webContents.send('mpv:tracksChange', t))
+        mpv.on('fileLoaded',    ()  => mainWindow.webContents.send('mpv:fileLoaded'))
+        mpv.on('fileEnded',     ()  => mainWindow.webContents.send('mpv:fileEnded'))
       })
-      mpv.on('tracksChange',  (t) => mainWindow.webContents.send('mpv:tracksChange', t))
-      mpv.on('fileLoaded',    ()  => mainWindow.webContents.send('mpv:fileLoaded'))
-      mpv.on('fileEnded',     ()  => mainWindow.webContents.send('mpv:fileEnded'))
-    })
-    .catch(e => console.error('[mpv] launch failed:', e))
+      .catch(e => console.error('[mpv] launch failed:', e))
+  }
 
   // ─── Window lifecycle ───────────────────────────────────────────────────────
 
@@ -116,7 +117,7 @@ function createWindow(): void {
     store.set('windowBounds', mainWindow.getNormalBounds())
     store.set('windowMaximized', mainWindow.isMaximized())
     store.set('windowFullScreen', mainWindow.isFullScreen())
-    mpv.quit()
+    mpv?.quit()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -139,19 +140,19 @@ function createWindow(): void {
     updateMpvBounds()
   })
 
-  ipcMain.handle('mpv:setHidden',    (_, hidden: boolean)                          => hidden ? mpv.hideVideo() : updateMpvBounds())
-  ipcMain.handle('mpv:openFile',     async (_, path: string)                       => { await mpv.openFile(path); updateMpvBounds() })
-  ipcMain.handle('mpv:play',         async ()                                       => mpv.play())
-  ipcMain.handle('mpv:pause',        async ()                                       => mpv.pause())
-  ipcMain.handle('mpv:togglePause',  async ()                                       => mpv.togglePause())
-  ipcMain.handle('mpv:seek',         async (_, s: number, t: 'absolute'|'relative') => mpv.seek(s, t))
-  ipcMain.handle('mpv:frameStep',    async ()                                       => mpv.frameStep())
-  ipcMain.handle('mpv:frameBackStep',async ()                                       => mpv.frameBackStep())
-  ipcMain.handle('mpv:setVolume',    async (_, level: number)                       => mpv.setVolume(level))
-  ipcMain.handle('mpv:addVolume',    async (_, delta: number)                       => mpv.addVolume(delta))
-  ipcMain.handle('mpv:setMute',      async (_, muted: boolean)                      => mpv.setMute(muted))
-  ipcMain.handle('mpv:setAudioTrack',async (_, id: number)                          => mpv.setAudioTrack(id))
-  ipcMain.handle('mpv:command',      async (_, args: unknown[])                     => mpv.command(args))
+  ipcMain.handle('mpv:setHidden',    (_, hidden: boolean)                          => hidden ? mpv?.hideVideo() : updateMpvBounds())
+  ipcMain.handle('mpv:openFile',     async (_, path: string)                       => { await mpv?.openFile(path); updateMpvBounds() })
+  ipcMain.handle('mpv:play',         async ()                                       => mpv?.play())
+  ipcMain.handle('mpv:pause',        async ()                                       => mpv?.pause())
+  ipcMain.handle('mpv:togglePause',  async ()                                       => mpv?.togglePause())
+  ipcMain.handle('mpv:seek',         async (_, s: number, t: 'absolute'|'relative') => mpv?.seek(s, t))
+  ipcMain.handle('mpv:frameStep',    async ()                                       => mpv?.frameStep())
+  ipcMain.handle('mpv:frameBackStep',async ()                                       => mpv?.frameBackStep())
+  ipcMain.handle('mpv:setVolume',    async (_, level: number)                       => mpv?.setVolume(level))
+  ipcMain.handle('mpv:addVolume',    async (_, delta: number)                       => mpv?.addVolume(delta))
+  ipcMain.handle('mpv:setMute',      async (_, muted: boolean)                      => mpv?.setMute(muted))
+  ipcMain.handle('mpv:setAudioTrack',async (_, id: number)                          => mpv?.setAudioTrack(id))
+  ipcMain.handle('mpv:command',      async (_, args: unknown[])                     => mpv?.command(args))
 }
 
 app.whenReady().then(() => {
