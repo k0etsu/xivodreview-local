@@ -37,12 +37,13 @@ Users provide a local video file and an FF Logs report URL or code. The applicat
 | Keys | Action |
 |---|---|
 | Space | Play / Pause |
-| Left / Right | Seek +-5 s |
-| Shift + Left / Right | Seek +-30 s |
+| Left / Right | Seek ±5 s |
+| Shift + Left / Right | Seek ±30 s |
 | Ctrl + Left / Right | Step one frame |
-| Up / Down | Volume +-10% |
+| Up / Down | Volume ±10% |
 | M | Toggle mute |
-| [ / ] | Offset +-500 ms |
+| A | Cycle audio track |
+| [ / ] | Offset ±500 ms |
 | S | Sync offset to current video position |
 | N / P | Next / previous pull |
 | R | Reload video + report |
