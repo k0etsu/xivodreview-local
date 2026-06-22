@@ -6,6 +6,7 @@
         :src="src ? 'file:///' + src.replace(/\\/g, '/') : undefined"
         @timeupdate="onTimeUpdate"
         @loadedmetadata="onMetadata"
+        @canplay="refreshAudioTracks"
         @play="playing = true"
         @pause="playing = false"
         @ended="playing = false"
@@ -104,7 +105,7 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import type { DeathEvent, Fight } from '../types'
 
 const props = defineProps<{
@@ -321,8 +322,38 @@ defineExpose({
   reloadVideo
 })
 
+// When src changes to a new file, reset state and explicitly reload the element.
+// Vue updates the :src attribute reactively, but Electron doesn't always re-initiate
+// loading on its own — especially if the previous video was mid-play or in an error state.
+watch(() => props.src, async (newSrc) => {
+  playing.value = false
+  currentTime.value = 0
+  duration.value = 0
+  audioTrackCount.value = 0
+  currentAudioTrackIndex.value = 0
+  if (!videoEl.value || !newSrc) return
+  await nextTick()  // let Vue flush the new :src attribute to the DOM
+  videoEl.value.load()
+})
+
 onMounted(() => {
   wrapper.value?.focus()
+  // audioTracks may not be fully populated at loadedmetadata; also listen to addtrack
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tracks = (videoEl.value as any)?.audioTracks
+  if (tracks) {
+    tracks.addEventListener('addtrack', refreshAudioTracks)
+    tracks.addEventListener('removetrack', refreshAudioTracks)
+  }
+})
+
+onUnmounted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tracks = (videoEl.value as any)?.audioTracks
+  if (tracks) {
+    tracks.removeEventListener('addtrack', refreshAudioTracks)
+    tracks.removeEventListener('removetrack', refreshAudioTracks)
+  }
 })
 </script>
 
