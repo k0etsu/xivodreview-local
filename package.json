@@ -33,14 +33,17 @@
       "out/**/*",
       "resources/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "resources/mpv.exe",
+        "to": "mpv.exe",
+        "filter": ["**/*"]
+      }
+    ],
     "win": {
       "target": [
         {
           "target": "zip",
-          "arch": ["x64"]
-        },
-        {
-          "target": "portable",
           "arch": ["x64"]
         }
       ],
