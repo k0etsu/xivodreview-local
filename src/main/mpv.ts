@@ -138,10 +138,11 @@ export class MpvController extends EventEmitter {
       transparent: false,
       backgroundColor: '#000000',
       skipTaskbar: true,
-      show: false,   // hidden until we know the correct position
+      show: false,   // hidden until a file is opened
       webPreferences: { nodeIntegration: false, contextIsolation: true }
     })
-    this.containerWin.loadURL('about:blank')
+    // Do NOT load any URL — loading about:blank lets Chromium's compositor
+    // paint over mpv's child window, producing a black screen.
     // Forward all mouse events to the main window so click-to-pause works
     this.containerWin.setIgnoreMouseEvents(true, { forward: true })
 
@@ -160,8 +161,9 @@ export class MpvController extends EventEmitter {
       '--keep-open=yes',
       '--idle=yes',
       '--force-window=yes',
-      '--hwdec=auto',
       '--vo=gpu',
+      '--gpu-api=d3d11',
+      '--hwdec=d3d11va-copy',
     ])
 
     this.proc.on('error', (e: NodeJS.ErrnoException) => {
@@ -237,6 +239,11 @@ export class MpvController extends EventEmitter {
 
   async openFile(path: string): Promise<void> {
     this.pauseOnLoad = true
+    // Show the container the first time a file is opened (not on startup —
+    // we want the placeholder to remain visible until the user picks a file).
+    if (this.containerWin && !this.containerWin.isDestroyed() && !this.containerWin.isVisible()) {
+      this.containerWin.showInactive()
+    }
     await this.ipc.send(['loadfile', path, 'replace'])
   }
 
@@ -297,7 +304,6 @@ export class MpvController extends EventEmitter {
       height: Math.max(1, Math.round(height))
     }
     this.containerWin.setBounds(b)
-    if (!this.containerWin.isVisible()) this.containerWin.show()
   }
 
   hideVideo(): void {
