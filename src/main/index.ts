@@ -1,4 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, protocol, net } from 'electron'
+
+if (process.platform === 'win32') app.setAppUserModelId('com.xivodreview.local')
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -73,8 +75,6 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  electronApp.setAppUserModelId('com.xivod.local')
-
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })

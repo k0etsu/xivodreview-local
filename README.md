@@ -29,7 +29,7 @@ Users provide a local video file and an FF Logs report URL or code. The applicat
 - Video sync offset with fine-grained controls and a one-click "sync here" button
 - Saved encounters with persistent offset per report
 - Reload button to re-fetch the report and refresh the video from disk (useful when recording live)
-- Portable executable, no installation required
+- No installation required — run directly from the extracted zip or the portable exe
 
 ## Keyboard Shortcuts
 
@@ -55,7 +55,8 @@ Grab the latest release from the [Releases](https://github.com/k0etsu/xivodrevie
 
 | Platform | File |
 |---|---|
-| Windows | `xivodreview-*.exe` (portable, no install needed) |
+| Windows | `xivodreview.*.zip` — extract and run `xivodreview.exe` |
+| Windows | `xivodreview.*.exe` — portable single-file, no extraction needed |
 | macOS | `xivodreview-*.dmg` |
 | Linux | `xivodreview-*.AppImage` |
 

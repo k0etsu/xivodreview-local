@@ -18,7 +18,9 @@ jobs:
           - os: windows-latest
             script: build:win
             artifact_name: windows
-            artifact_path: dist/*.exe
+            artifact_path: |
+              dist/*.exe
+              dist/*.zip
           - os: macos-latest
             script: build:mac
             artifact_name: macos

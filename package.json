@@ -1,6 +1,6 @@
 {
   "name": "xivodreview",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local video + FFLogs raid review tool",
   "main": "./out/main/index.js",
   "scripts": {
@@ -34,7 +34,17 @@
       "resources/**/*"
     ],
     "win": {
-      "target": "portable",
+      "target": [
+        {
+          "target": "zip",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "${productName}.${version}.${ext}",
       "icon": "resources/icon.png"
     },
     "mac": {
