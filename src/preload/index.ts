@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('api', {
   mpvSetMute:       (muted: boolean): Promise<void>                        => ipcRenderer.invoke('mpv:setMute', muted),
   mpvSetAudioTrack: (id: number): Promise<void>                            => ipcRenderer.invoke('mpv:setAudioTrack', id),
   mpvCommand:       (args: unknown[]): Promise<unknown>                    => ipcRenderer.invoke('mpv:command', args),
+  mpvSetHidden:     (hidden: boolean): Promise<void>                       => ipcRenderer.invoke('mpv:setHidden', hidden),
 
   // Renderer reports video-container bounds (viewport-relative) so the main
   // process can position the mpv child window correctly.

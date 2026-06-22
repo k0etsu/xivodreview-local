@@ -1,7 +1,15 @@
 /**
  * MpvController — spawns mpv as a child process, embeds its video output into
  * a native child BrowserWindow (via --wid), and controls playback through
- * mpv's JSON IPC protocol over a Windows named pipe.
+ * mpv's JSON IPC protocol over a Windows named pipe / Unix socket.
+ *
+ * Key insight: WGL (OpenGL on Windows) requires a VISIBLE HWND to create a
+ * rendering context. The container window must be shown (even if off-screen)
+ * before mpv launches so the VO can initialize correctly.
+ *
+ * DirectComposition (Electron's GPU compositor) is disabled app-wide via
+ * app.disableHardwareAcceleration() in index.ts, which prevents Chrome's DWM
+ * overlay from covering mpv's WS_CHILD rendering window.
  */
 
 import { EventEmitter } from 'events'
@@ -98,8 +106,8 @@ interface MpvTrackEntry {
 }
 
 export interface MpvAudioTrack {
-  id: number        // mpv 1-based track id — used with set_property aid
-  index: number     // 0-based index among audio tracks
+  id: number
+  index: number
   title: string
   language: string
   selected: boolean
@@ -112,9 +120,9 @@ export class MpvController extends EventEmitter {
   private ipc = new MpvIpc()
   private containerWin: BrowserWindow | null = null
   private pipeName: string
-  private pauseOnLoad = true   // always start paused after loadfile
+  private pauseOnLoad = true
+  private fileOpened = false   // true after the first openFile call
 
-  // Resolved once IPC is connected and observers are set up
   readonly ready: Promise<void>
   private readyResolve!: () => void
   private readyReject!: (e: Error) => void
@@ -132,21 +140,24 @@ export class MpvController extends EventEmitter {
   }
 
   async launch(mpvBin: string): Promise<void> {
-    // Blank native child window — mpv renders its video into this HWND
     this.containerWin = new BrowserWindow({
       parent: this.mainWindow,
-      x: 0, y: 38,
-      width: 100, height: 100,
+      // Start off-screen so the placeholder remains visible, but VISIBLE so
+      // WGL can create an OpenGL rendering context on this HWND.
+      x: -9999, y: -9999,
+      width: 640, height: 360,
       frame: false,
       transparent: false,
       backgroundColor: '#000000',
       skipTaskbar: true,
-      show: false,   // hidden until a file is opened
+      show: false,
       webPreferences: { nodeIntegration: false, contextIsolation: true }
     })
-    // Do NOT load any URL — loading about:blank lets Chromium's compositor
-    // paint over mpv's child window, producing a black screen.
-    // Forward all mouse events to the main window so click-to-pause works
+    // Show off-screen immediately — mpv's WGL VO requires a visible HWND.
+    // The window is at -9999,-9999 so it doesn't cover the placeholder.
+    this.containerWin.showInactive()
+
+    // Forward all mouse events to the main window so click-to-pause works.
     this.containerWin.setIgnoreMouseEvents(true, { forward: true })
 
     const hwndBuf = this.containerWin.getNativeWindowHandle()
@@ -157,7 +168,7 @@ export class MpvController extends EventEmitter {
     this.proc = spawn(mpvBin, [
       `--wid=${hwnd}`,
       `--input-ipc-server=${this.pipeName}`,
-      '--no-config',          // isolate from user's mpv.conf (af filters, profiles, etc.)
+      '--no-config',
       '--no-terminal',
       '--no-osc',
       '--no-input-default-bindings',
@@ -166,13 +177,12 @@ export class MpvController extends EventEmitter {
       '--idle=yes',
       '--force-window=yes',
       '--vo=gpu',
-      // D3D11 (the Windows default via --gpu-api=auto) uses DXGI's flip-model swap
-      // chain, which cannot present frames into an embedded child window (--wid) —
-      // only the window it owns. OpenGL (WGL) binds a context directly to any HWND,
-      // so it works correctly with --wid embedding. macOS and Linux use their default
-      // backends (Metal / Vulkan+OpenGL) which do not have this restriction.
+      // OpenGL (WGL) binds directly to the target HWND and is compatible with
+      // --wid child-window embedding on Windows. D3D11 uses a DXGI swap chain
+      // that cannot present to an embedded child window.
+      // macOS / Linux use their default backend (Metal / OpenGL) via auto.
       ...(process.platform === 'win32' ? ['--gpu-api=opengl'] : []),
-      '--hwdec=auto',         // nvdec / d3d11va-copy / videotoolbox / vaapi — best available
+      '--hwdec=auto',
     ])
 
     this.proc.on('error', (e: NodeJS.ErrnoException) => {
@@ -182,9 +192,12 @@ export class MpvController extends EventEmitter {
       console.error('[mpv]', msg)
       this.readyReject(new Error(msg))
     })
+    this.proc.on('exit', (code, signal) => {
+      console.log(`[mpv] exited: code=${code} signal=${signal}`)
+    })
     this.proc.stderr?.on('data', (d: Buffer) => {
       const line = d.toString().trim()
-      if (line && !line.startsWith('[vo/gpu]')) console.log('[mpv]', line)
+      if (line) console.log('[mpv]', line)
     })
 
     try {
@@ -194,7 +207,6 @@ export class MpvController extends EventEmitter {
       throw e
     }
 
-    // Observe properties we care about
     await this.ipc.send(['observe_property', 1, 'time-pos'])
     await this.ipc.send(['observe_property', 2, 'duration'])
     await this.ipc.send(['observe_property', 3, 'pause'])
@@ -248,44 +260,25 @@ export class MpvController extends EventEmitter {
 
   async openFile(path: string): Promise<void> {
     this.pauseOnLoad = true
-    // Show the container the first time a file is opened (not on startup —
-    // we want the placeholder to remain visible until the user picks a file).
-    if (this.containerWin && !this.containerWin.isDestroyed() && !this.containerWin.isVisible()) {
-      this.containerWin.showInactive()
-    }
+    this.fileOpened = true
     await this.ipc.send(['loadfile', path, 'replace'])
   }
 
-  async play(): Promise<void> {
-    await this.ipc.send(['set_property', 'pause', false])
-  }
-
-  async pause(): Promise<void> {
-    await this.ipc.send(['set_property', 'pause', true])
-  }
-
-  async togglePause(): Promise<void> {
-    await this.ipc.send(['cycle', 'pause'])
-  }
+  async play(): Promise<void>  { await this.ipc.send(['set_property', 'pause', false]) }
+  async pause(): Promise<void> { await this.ipc.send(['set_property', 'pause', true]) }
+  async togglePause(): Promise<void> { await this.ipc.send(['cycle', 'pause']) }
 
   async seek(seconds: number, type: 'absolute' | 'relative' = 'absolute'): Promise<void> {
     await this.ipc.send(['seek', seconds, type])
   }
 
-  async frameStep(): Promise<void> {
-    await this.ipc.send(['frame-step'])
-  }
+  async frameStep(): Promise<void>     { await this.ipc.send(['frame-step']) }
+  async frameBackStep(): Promise<void> { await this.ipc.send(['frame-back-step']) }
 
-  async frameBackStep(): Promise<void> {
-    await this.ipc.send(['frame-back-step'])
-  }
-
-  /** level is 0–1 (Electron convention); mpv uses 0–100 */
   async setVolume(level: number): Promise<void> {
     await this.ipc.send(['set_property', 'volume', Math.round(Math.max(0, Math.min(1, level)) * 100)])
   }
 
-  /** delta is 0–1 fraction; translates to ±N in mpv's 0–100 scale */
   async addVolume(delta: number): Promise<void> {
     await this.ipc.send(['add', 'volume', Math.round(delta * 100)])
   }
@@ -309,14 +302,22 @@ export class MpvController extends EventEmitter {
     const b = {
       x: Math.round(x),
       y: Math.round(y),
-      width: Math.max(1, Math.round(width)),
+      width:  Math.max(1, Math.round(width)),
       height: Math.max(1, Math.round(height))
     }
-    this.containerWin.setBounds(b)
+    if (this.fileOpened) {
+      // Move into the video area once a file has been opened.
+      this.containerWin.setBounds(b)
+    } else {
+      // File not yet opened — keep off-screen but update stored dimensions
+      // so they're correct the moment openFile is called.
+      this.containerWin.setBounds({ x: -9999, y: -9999, width: b.width, height: b.height })
+    }
   }
 
   hideVideo(): void {
-    if (this.containerWin && !this.containerWin.isDestroyed()) this.containerWin.hide()
+    if (this.containerWin && !this.containerWin.isDestroyed())
+      this.containerWin.setBounds({ x: -9999, y: -9999, width: 640, height: 360 })
   }
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────────

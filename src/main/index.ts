@@ -1,5 +1,9 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 
+// Must be called before app is ready. Disables Chrome's DirectComposition
+// GPU overlay so mpv's WS_CHILD window (via --wid) is not covered.
+if (process.platform === 'win32') app.disableHardwareAcceleration()
+
 if (process.platform === 'win32') app.setAppUserModelId('com.xivodreview.local')
 import { join } from 'path'
 import { existsSync } from 'fs'
@@ -73,8 +77,13 @@ function createWindow(): void {
     )
   }
 
-  mainWindow.on('move', updateMpvBounds)
-  mainWindow.on('resize', updateMpvBounds)
+  mainWindow.on('move',     updateMpvBounds)
+  mainWindow.on('resize',   updateMpvBounds)
+  // Keep mpv on top only while this app is focused so it doesn't float
+  // above unrelated applications when the user switches away.
+  // Hide mpv's window when the main window is minimized/restored.
+  mainWindow.on('minimize', () => mpv.hideVideo())
+  mainWindow.on('restore',  () => updateMpvBounds())
 
   // Launch mpv eagerly — should be connected before the user opens a file
   mpv.launch(getMpvBin())
@@ -83,7 +92,12 @@ function createWindow(): void {
       // Wire up events → renderer
       mpv.on('timeUpdate',    (t) => mainWindow.webContents.send('mpv:timeUpdate', t))
       mpv.on('durationChange',(d) => mainWindow.webContents.send('mpv:durationChange', d))
-      mpv.on('pauseChange',   (p) => mainWindow.webContents.send('mpv:pauseChange', p))
+      mpv.on('pauseChange',   (p) => {
+        mainWindow.webContents.send('mpv:pauseChange', p)
+        // Clicking the video area gives focus to mpv's window.
+        // Return it to the main window so keyboard hotkeys keep working.
+        if (!mainWindow.isFocused()) mainWindow.focus()
+      })
       mpv.on('tracksChange',  (t) => mainWindow.webContents.send('mpv:tracksChange', t))
       mpv.on('fileLoaded',    ()  => mainWindow.webContents.send('mpv:fileLoaded'))
       mpv.on('fileEnded',     ()  => mainWindow.webContents.send('mpv:fileEnded'))
@@ -125,7 +139,8 @@ function createWindow(): void {
     updateMpvBounds()
   })
 
-  ipcMain.handle('mpv:openFile',     async (_, path: string)                       => mpv.openFile(path))
+  ipcMain.handle('mpv:setHidden',    (_, hidden: boolean)                          => hidden ? mpv.hideVideo() : updateMpvBounds())
+  ipcMain.handle('mpv:openFile',     async (_, path: string)                       => { await mpv.openFile(path); updateMpvBounds() })
   ipcMain.handle('mpv:play',         async ()                                       => mpv.play())
   ipcMain.handle('mpv:pause',        async ()                                       => mpv.pause())
   ipcMain.handle('mpv:togglePause',  async ()                                       => mpv.togglePause())

@@ -105,7 +105,7 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import VideoPlayer from './components/VideoPlayer.vue'
 import SyncControls from './components/SyncControls.vue'
 import FFlogsInput from './components/FFlogsInput.vue'
@@ -121,6 +121,12 @@ const player = ref<InstanceType<typeof VideoPlayer> | null>(null)
 const showSettings = ref(false)
 const showHotkeyHelp = ref(false)
 const missingVideoPath = ref<string | null>(null)
+
+// Hide mpv's native child window while any modal is open; it sits above all
+// DOM content in the OS window stack and cannot be covered by CSS z-index.
+watch([showSettings, showHotkeyHelp, missingVideoPath], ([s, h, m]) => {
+  window.api.mpvSetHidden(s || h || !!m)
+})
 
 const videoPath = ref<string | null>(null)
 const currentVideoTime = ref(0)
