@@ -29,6 +29,7 @@
       <div class="video-panel">
         <VideoPlayer
           ref="player"
+          :backend="playerBackend"
           :src="videoPath"
           :current-pull="currentPull"
           :deaths="currentDeaths"
@@ -83,7 +84,7 @@
     </div>
 
     <SettingsPanel v-if="showSettings" @close="showSettings = false" />
-    <HotkeyHelp v-if="showHotkeyHelp" @close="showHotkeyHelp = false" />
+    <HotkeyHelp v-if="showHotkeyHelp" :backend="playerBackend" @close="showHotkeyHelp = false" />
 
     <div v-if="missingVideoPath" class="modal-overlay" @click.self="missingVideoPath = null">
       <div class="modal-box">
@@ -105,7 +106,7 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import VideoPlayer from './components/VideoPlayer.vue'
 import SyncControls from './components/SyncControls.vue'
 import FFlogsInput from './components/FFlogsInput.vue'
@@ -121,6 +122,13 @@ const player = ref<InstanceType<typeof VideoPlayer> | null>(null)
 const showSettings = ref(false)
 const showHotkeyHelp = ref(false)
 const missingVideoPath = ref<string | null>(null)
+const playerBackend = ref<'mpv' | 'html5'>('mpv')
+
+// Hide mpv's native child window while any modal is open; it sits above all
+// DOM content in the OS window stack and cannot be covered by CSS z-index.
+watch([showSettings, showHotkeyHelp, missingVideoPath], ([s, h, m]) => {
+  if (playerBackend.value === 'mpv') window.api.mpvSetHidden(s || h || !!m)
+})
 
 const videoPath = ref<string | null>(null)
 const currentVideoTime = ref(0)
@@ -441,6 +449,7 @@ function onGlobalKey(e: KeyboardEvent) {
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 onMounted(async () => {
+  playerBackend.value = ((await window.api.storeGet('playerBackend')) as 'mpv' | 'html5') ?? 'mpv'
   const stored = await window.api.storeGet('savedEncounters') as Record<string, SavedEncounter> | null
   if (stored) savedEncounters.value = stored
   document.addEventListener('keydown', onGlobalKey)

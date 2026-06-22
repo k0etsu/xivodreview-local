@@ -29,19 +29,21 @@ Users provide a local video file and an FF Logs report URL or code. The applicat
 - Video sync offset with fine-grained controls and a one-click "sync here" button
 - Saved encounters with persistent offset per report
 - Reload button to re-fetch the report and refresh the video from disk (useful when recording live)
-- No installation required — run directly from the extracted zip or the portable exe
+- Windows: no installation required — run directly from the extracted zip (mpv is bundled)
+- macOS / Linux: requires mpv installed separately (see [Requirements](#requirements))
 
 ## Keyboard Shortcuts
 
 | Keys | Action |
 |---|---|
 | Space | Play / Pause |
-| Left / Right | Seek +-5 s |
-| Shift + Left / Right | Seek +-30 s |
+| Left / Right | Seek ±5 s |
+| Shift + Left / Right | Seek ±30 s |
 | Ctrl + Left / Right | Step one frame |
-| Up / Down | Volume +-10% |
+| Up / Down | Volume ±10% |
 | M | Toggle mute |
-| [ / ] | Offset +-500 ms |
+| A | Cycle audio track |
+| [ / ] | Offset ±500 ms |
 | S | Sync offset to current video position |
 | N / P | Next / previous pull |
 | R | Reload video + report |
@@ -56,9 +58,41 @@ Grab the latest release from the [Releases](https://github.com/k0etsu/xivodrevie
 | Platform | File |
 |---|---|
 | Windows | `xivodreview.*.zip` — extract and run `xivodreview.exe` |
-| Windows | `xivodreview.*.exe` — portable single-file, no extraction needed |
 | macOS | `xivodreview-*.dmg` |
 | Linux | `xivodreview-*.AppImage` |
+
+## Requirements
+
+### mpv
+
+Video playback is powered by [mpv](https://mpv.io).
+
+**Windows** — mpv is bundled inside the zip. No separate installation needed.
+
+**macOS** — install via Homebrew:
+
+```sh
+brew install mpv
+```
+
+**Linux** — install via your distro's package manager:
+
+```sh
+# Debian / Ubuntu
+sudo apt install mpv
+
+# Arch
+sudo pacman -S mpv
+
+# Fedora
+sudo dnf install mpv
+```
+
+The app will locate `mpv` on your PATH automatically on macOS and Linux.
+
+### FFLogs API credentials
+
+See [Setup](#setup) below.
 
 ## Setup
 

@@ -7,6 +7,23 @@
       </div>
 
       <div class="panel-body">
+        <div class="section">
+          <div class="section-label">Player backend</div>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" value="mpv" :checked="playerBackend === 'mpv'" @change="setBackend('mpv')" />
+              mpv <span class="radio-hint">(recommended — frame stepping, fast audio track switching)</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" value="html5" :checked="playerBackend === 'html5'" @change="setBackend('html5')" />
+              HTML5 <span class="radio-hint">(built-in, no mpv required)</span>
+            </label>
+          </div>
+          <div v-if="backendChanged" class="restart-note">Restart required to apply.</div>
+        </div>
+
+        <div class="divider" />
+
         <p class="help-text">
           FFLogs API credentials are required to load reports.
           Get yours at
@@ -50,11 +67,20 @@ const clientSecret = ref('')
 const saved = ref(false)
 const testing = ref(false)
 const testResult = ref<{ ok: boolean; error?: string } | null>(null)
+const playerBackend = ref<'mpv' | 'html5'>('mpv')
+const backendChanged = ref(false)
 
 onMounted(async () => {
   clientId.value = (await window.api.storeGet('fflogsClientId') as string) ?? ''
   clientSecret.value = (await window.api.storeGet('fflogsClientSecret') as string) ?? ''
+  playerBackend.value = ((await window.api.storeGet('playerBackend')) as 'mpv' | 'html5') ?? 'mpv'
 })
+
+async function setBackend(val: 'mpv' | 'html5') {
+  playerBackend.value = val
+  await window.api.storeSet('playerBackend', val)
+  backendChanged.value = true
+}
 
 async function save() {
   await window.api.storeSet('fflogsClientId', clientId.value.trim())
@@ -176,4 +202,19 @@ async function test() {
   color: var(--kill-green);
   font-size: 13px;
 }
+
+.section { display: flex; flex-direction: column; gap: 8px; }
+.section-label { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.radio-group { display: flex; flex-direction: column; gap: 6px; }
+.radio-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.radio-hint { font-size: 11px; color: var(--text-muted); }
+.restart-note { font-size: 11px; color: #e8a040; }
+.divider { border: none; border-top: 1px solid var(--border); margin: 0; }
 </style>

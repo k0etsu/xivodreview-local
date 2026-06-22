@@ -11,10 +11,10 @@
         <div class="row"><div class="keys"><kbd>Space</kbd></div><span>Play / Pause</span></div>
         <div class="row"><div class="keys"><kbd>←</kbd><kbd>→</kbd></div><span>Seek ±5 s</span></div>
         <div class="row"><div class="keys"><kbd>Shift</kbd><span class="plus">+</span><kbd>←</kbd><kbd>→</kbd></div><span>Seek ±30 s</span></div>
-        <div class="row"><div class="keys"><kbd>Ctrl</kbd><span class="plus">+</span><kbd>←</kbd><kbd>→</kbd></div><span>Step one frame</span></div>
+        <div class="row" :class="{ 'mpv-only': backend === 'html5' }"><div class="keys"><kbd>Ctrl</kbd><span class="plus">+</span><kbd>←</kbd><kbd>→</kbd></div><span>Step one frame <span class="mpv-badge">mpv</span></span></div>
         <div class="row"><div class="keys"><kbd>↑</kbd><kbd>↓</kbd></div><span>Volume ±10%</span></div>
         <div class="row"><div class="keys"><kbd>M</kbd></div><span>Toggle mute</span></div>
-        <div class="row"><div class="keys"><kbd>A</kbd></div><span>Cycle audio track</span></div>
+        <div class="row" :class="{ 'mpv-only': backend === 'html5' }"><div class="keys"><kbd>A</kbd></div><span>Cycle audio track <span class="mpv-badge">mpv</span></span></div>
 
         <div class="section-label">Sync</div>
         <div class="row"><div class="keys"><kbd>[</kbd><kbd>]</kbd></div><span>Offset ±500 ms</span></div>
@@ -36,6 +36,7 @@
 </template>
 
 <script lang="ts" setup>
+defineProps<{ backend: 'mpv' | 'html5' }>()
 defineEmits<{ (e: 'close'): void }>()
 </script>
 
@@ -123,6 +124,25 @@ defineEmits<{ (e: 'close'): void }>()
   font-size: 11px;
   color: var(--text-muted);
   padding: 0 1px;
+}
+
+.mpv-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #7ba7d4;
+  border: 1px solid #3a5a7a;
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 1.6;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
+.mpv-only {
+  opacity: 0.35;
 }
 
 kbd {

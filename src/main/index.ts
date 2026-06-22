@@ -1,12 +1,12 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, protocol, net } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
+
+// Must be called before app is ready. Disables Chrome's DirectComposition
+// GPU overlay so mpv's WS_CHILD window (via --wid) is not covered.
+if (process.platform === 'win32') app.disableHardwareAcceleration()
 
 if (process.platform === 'win32') app.setAppUserModelId('com.xivodreview.local')
 import { join } from 'path'
-import { existsSync, unlinkSync } from 'fs'
-import { spawn } from 'child_process'
-import { tmpdir } from 'os'
-import { randomUUID } from 'crypto'
-import { probeAudioTracks } from './mediaprobe'
+import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import Store from 'electron-store'
 import {
@@ -15,9 +15,7 @@ import {
   queryFFLogsReport,
   queryFFLogsDeaths
 } from './fflogs'
-
-// Temp files created when remuxing audio tracks; cleaned up on quit.
-const tempFiles = new Set<string>()
+import { MpvController } from './mpv'
 
 const store = new Store<{
   fflogsClientId: string
@@ -27,6 +25,15 @@ const store = new Store<{
   windowMaximized: boolean
   windowFullScreen: boolean
 }>()
+
+// mpv binary: bundled in resources/ for packaged builds, otherwise expect in PATH
+function getMpvBin(): string {
+  if (app.isPackaged) {
+    const bundled = join(process.resourcesPath, process.platform === 'win32' ? 'mpv.exe' : 'mpv')
+    if (existsSync(bundled)) return bundled
+  }
+  return process.platform === 'win32' ? 'mpv.exe' : 'mpv'
+}
 
 function createWindow(): void {
   const savedBounds = store.get('windowBounds') as { x: number; y: number; width: number; height: number } | undefined
@@ -49,17 +56,60 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      // Allow local file video playback
-      webSecurity: false
     }
   })
 
+  // ─── mpv setup ─────────────────────────────────────────────────────────────
+
+  const playerBackend = store.get('playerBackend', 'mpv') as 'mpv' | 'html5'
+  const mpv = playerBackend === 'mpv' ? new MpvController(mainWindow) : null
+
+  // Viewport-relative bounds of the video-container div sent by the renderer.
+  // Combined with mainWindow.getContentBounds() to get absolute screen position.
+  let vpBounds = { left: 0, top: 38, width: 100, height: 100 }
+
+  function updateMpvBounds() {
+    if (!mpv) return
+    const cb = mainWindow.getContentBounds()
+    mpv.setVideoBounds(
+      cb.x + vpBounds.left,
+      cb.y + vpBounds.top,
+      vpBounds.width,
+      vpBounds.height
+    )
+  }
+
+  mainWindow.on('move',   updateMpvBounds)
+  mainWindow.on('resize', updateMpvBounds)
+
+  if (mpv) {
+    mainWindow.on('minimize', () => mpv.hideVideo())
+    mainWindow.on('restore',  () => updateMpvBounds())
+
+    // Launch mpv eagerly — should be connected before the user opens a file
+    mpv.launch(getMpvBin())
+      .then(() => {
+        console.log('[mpv] ready')
+        mpv.on('timeUpdate',    (t) => mainWindow.webContents.send('mpv:timeUpdate', t))
+        mpv.on('durationChange',(d) => mainWindow.webContents.send('mpv:durationChange', d))
+        mpv.on('pauseChange',   (p) => {
+          mainWindow.webContents.send('mpv:pauseChange', p)
+          // Clicking the video area gives focus to mpv's window.
+          // Return it to the main window so keyboard hotkeys keep working.
+          if (!mainWindow.isFocused()) mainWindow.focus()
+        })
+        mpv.on('tracksChange',  (t) => mainWindow.webContents.send('mpv:tracksChange', t))
+        mpv.on('fileLoaded',    ()  => mainWindow.webContents.send('mpv:fileLoaded'))
+        mpv.on('fileEnded',     ()  => mainWindow.webContents.send('mpv:fileEnded'))
+      })
+      .catch(e => console.error('[mpv] launch failed:', e))
+  }
+
+  // ─── Window lifecycle ───────────────────────────────────────────────────────
+
   mainWindow.on('ready-to-show', () => {
-    if (savedFullScreen) {
-      mainWindow.setFullScreen(true)
-    } else if (savedMaximized) {
-      mainWindow.maximize()
-    }
+    if (savedFullScreen) mainWindow.setFullScreen(true)
+    else if (savedMaximized) mainWindow.maximize()
     mainWindow.show()
   })
 
@@ -67,6 +117,7 @@ function createWindow(): void {
     store.set('windowBounds', mainWindow.getNormalBounds())
     store.set('windowMaximized', mainWindow.isMaximized())
     store.set('windowFullScreen', mainWindow.isFullScreen())
+    mpv?.quit()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -79,6 +130,29 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+
+  // ─── mpv IPC handlers ───────────────────────────────────────────────────────
+
+  // Renderer reports the video-container div's bounds (viewport-relative).
+  // We combine this with the window's content bounds to position the mpv child window.
+  ipcMain.on('mpv:setViewportBounds', (_, bounds: typeof vpBounds) => {
+    vpBounds = bounds
+    updateMpvBounds()
+  })
+
+  ipcMain.handle('mpv:setHidden',    (_, hidden: boolean)                          => hidden ? mpv?.hideVideo() : updateMpvBounds())
+  ipcMain.handle('mpv:openFile',     async (_, path: string)                       => { await mpv?.openFile(path); updateMpvBounds() })
+  ipcMain.handle('mpv:play',         async ()                                       => mpv?.play())
+  ipcMain.handle('mpv:pause',        async ()                                       => mpv?.pause())
+  ipcMain.handle('mpv:togglePause',  async ()                                       => mpv?.togglePause())
+  ipcMain.handle('mpv:seek',         async (_, s: number, t: 'absolute'|'relative') => mpv?.seek(s, t))
+  ipcMain.handle('mpv:frameStep',    async ()                                       => mpv?.frameStep())
+  ipcMain.handle('mpv:frameBackStep',async ()                                       => mpv?.frameBackStep())
+  ipcMain.handle('mpv:setVolume',    async (_, level: number)                       => mpv?.setVolume(level))
+  ipcMain.handle('mpv:addVolume',    async (_, delta: number)                       => mpv?.addVolume(delta))
+  ipcMain.handle('mpv:setMute',      async (_, muted: boolean)                      => mpv?.setMute(muted))
+  ipcMain.handle('mpv:setAudioTrack',async (_, id: number)                          => mpv?.setAudioTrack(id))
+  ipcMain.handle('mpv:command',      async (_, args: unknown[])                     => mpv?.command(args))
 }
 
 app.whenReady().then(() => {
@@ -86,7 +160,8 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // IPC: open video file dialog
+  // ─── Dialog ──────────────────────────────────────────────────────────────────
+
   ipcMain.handle('dialog:openVideo', async () => {
     const result = await dialog.showOpenDialog({
       title: 'Select Video File',
@@ -100,7 +175,8 @@ app.whenReady().then(() => {
     return result.filePaths[0]
   })
 
-  // IPC: window controls
+  // ─── Window controls ─────────────────────────────────────────────────────────
+
   ipcMain.handle('window:minimize', () => BrowserWindow.getFocusedWindow()?.minimize())
   ipcMain.handle('window:maximize', () => {
     const win = BrowserWindow.getFocusedWindow()
@@ -109,7 +185,8 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('window:close', () => BrowserWindow.getFocusedWindow()?.close())
 
-  // IPC: test FFLogs credentials by attempting a token fetch
+  // ─── FFLogs ──────────────────────────────────────────────────────────────────
+
   ipcMain.handle('fflogs:testCredentials', async (_event, clientId: string, clientSecret: string) => {
     try {
       await fetchFFLogsToken(clientId, clientSecret)
@@ -119,105 +196,44 @@ app.whenReady().then(() => {
     }
   })
 
-  // IPC: fetch FFLogs report (fights + masterData + phases)
   ipcMain.handle('fflogs:fetchReport', async (_event, reportCode: string) => {
     const clientId = store.get('fflogsClientId', '')
     const clientSecret = store.get('fflogsClientSecret', '')
-    if (!clientId || !clientSecret) {
-      throw new Error('FFLogs credentials not configured. Open Settings to add them.')
-    }
+    if (!clientId || !clientSecret) throw new Error('FFLogs credentials not configured. Open Settings to add them.')
     try {
       const token = await fetchFFLogsToken(clientId, clientSecret)
       return await queryFFLogsReport(reportCode, token)
     } catch (err) {
-      invalidateToken()
-      throw err
+      invalidateToken(); throw err
     }
   })
 
-  // IPC: fetch death events for a specific fight window
-  ipcMain.handle(
-    'fflogs:fetchDeaths',
-    async (_event, reportCode: string, startTime: number, endTime: number) => {
-      const clientId = store.get('fflogsClientId', '')
-      const clientSecret = store.get('fflogsClientSecret', '')
-      if (!clientId || !clientSecret) {
-        throw new Error('FFLogs credentials not configured.')
-      }
-      try {
-        const token = await fetchFFLogsToken(clientId, clientSecret)
-        return await queryFFLogsDeaths(reportCode, startTime, endTime, token)
-      } catch (err) {
-        invalidateToken()
-        throw err
-      }
+  ipcMain.handle('fflogs:fetchDeaths', async (_event, reportCode: string, startTime: number, endTime: number) => {
+    const clientId = store.get('fflogsClientId', '')
+    const clientSecret = store.get('fflogsClientSecret', '')
+    if (!clientId || !clientSecret) throw new Error('FFLogs credentials not configured.')
+    try {
+      const token = await fetchFFLogsToken(clientId, clientSecret)
+      return await queryFFLogsDeaths(reportCode, startTime, endTime, token)
+    } catch (err) {
+      invalidateToken(); throw err
     }
-  )
-
-  // IPC: probe audio tracks — native parser, no external tools needed
-  ipcMain.handle('video:getAudioTracks', (_event, filePath: string) => {
-    return probeAudioTracks(filePath)
   })
 
-  // IPC: remux video keeping only the specified audio track into a temp file (requires ffmpeg in PATH)
-  ipcMain.handle('video:remuxWithTrack', (_event, filePath: string, audioTrackIndex: number) =>
-    new Promise<string>((resolve, reject) => {
-      const tmpPath = join(tmpdir(), `xivodreview-${randomUUID()}.mkv`)
+  // ─── Store / filesystem ───────────────────────────────────────────────────────
 
-      // Search common Windows install locations if ffmpeg isn't in PATH
-      const ffmpegCandidates = process.platform === 'win32'
-        ? [
-            'ffmpeg',
-            'C:\\ffmpeg\\bin\\ffmpeg.exe',
-            'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
-            join(process.env['USERPROFILE'] ?? '', 'scoop', 'apps', 'ffmpeg', 'current', 'bin', 'ffmpeg.exe'),
-            'C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe',
-          ].filter((p, i) => i === 0 || existsSync(p))
-        : ['ffmpeg']
-
-      const ffmpeg = ffmpegCandidates[ffmpegCandidates.length > 1 ? 1 : 0]
-
-      const proc = spawn(ffmpeg, [
-        '-y', '-i', filePath,
-        '-map', '0:v:0',
-        '-map', `0:a:${audioTrackIndex}`,
-        '-c', 'copy',
-        tmpPath
-      ])
-      let stderr = ''
-      proc.stderr.on('data', (d: Buffer) => { stderr += d.toString() })
-      proc.on('error', (e: NodeJS.ErrnoException) =>
-        reject(new Error(e.code === 'ENOENT' ? 'ffmpeg not found — install it and add to PATH' : e.message))
-      )
-      proc.on('close', (code) => {
-        if (code !== 0) return reject(new Error(`ffmpeg exited ${code}: ${stderr.slice(-400)}`))
-        tempFiles.add(tmpPath)
-        resolve(tmpPath)
-      })
-    })
-  )
-
-  // IPC: check whether a file path exists on disk
   ipcMain.handle('fs:exists', (_event, filePath: string) => existsSync(filePath))
-
-  // IPC: electron-store access
-  ipcMain.handle('store:get', (_event, key: string) => store.get(key))
-  ipcMain.handle('store:set', (_event, key: string, value: unknown) => store.set(key, value))
-  ipcMain.handle('store:delete', (_event, key: string) => store.delete(key))
+  ipcMain.handle('store:get',    (_event, key: string)                => store.get(key))
+  ipcMain.handle('store:set',    (_event, key: string, value: unknown) => store.set(key, value))
+  ipcMain.handle('store:delete', (_event, key: string)                => store.delete(key))
 
   createWindow()
 
-  app.on('activate', function () {
+  app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
-app.on('will-quit', () => {
-  for (const f of tempFiles) { try { unlinkSync(f) } catch (_) {} }
-})
-
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
+  if (process.platform !== 'darwin') app.quit()
 })
