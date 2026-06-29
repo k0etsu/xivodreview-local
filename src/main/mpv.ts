@@ -1,12 +1,11 @@
 /**
  * MpvController
  *
- * Windows: loads libmpv-2.dll via koffi and uses MPV_RENDER_API_TYPE_SW to
- * render video frames into a CPU pixel buffer. Frames are painted to a native
- * WS_CHILD HWND via GDI StretchDIBits. Because no WGL context is created on
- * the HWND, there is no Z-order conflict with Chromium's render widget, and
- * we always hold the last rendered frame in RAM — so the video stays visible
- * even when paused and the window loses focus.
+ * Windows: loads libmpv-2.dll via koffi and uses MPV_RENDER_API_TYPE_OPENGL.
+ * We create a WGL context on a WS_CHILD HWND ourselves, tell mpv to render into
+ * it via the GL render API, then call SwapBuffers ourselves. This enables
+ * GPU-accelerated decode (hwdec: auto) while keeping reliability: we own the
+ * swap call so we can repaint on demand even when paused.
  *
  * macOS/Linux: spawns mpv.exe as a child process and communicates via JSON IPC
  * over a Unix socket (existing approach; screen capture works natively there).
@@ -138,12 +137,10 @@ const MPV_EVENT_FILE_LOADED     = 8
 const MPV_EVENT_END_FILE        = 7
 const MPV_EVENT_PROPERTY_CHANGE = 22
 
-const MPV_RENDER_PARAM_API_TYPE   = 1
-const MPV_RENDER_PARAM_SW_SIZE    = 17
-const MPV_RENDER_PARAM_SW_FORMAT  = 18
-const MPV_RENDER_PARAM_SW_STRIDE  = 19
-const MPV_RENDER_PARAM_SW_POINTER = 20
-const MPV_RENDER_UPDATE_FRAME     = 1
+const MPV_RENDER_PARAM_API_TYPE           = 1
+const MPV_RENDER_PARAM_OPENGL_INIT_PARAMS = 2
+const MPV_RENDER_PARAM_OPENGL_FBO         = 3
+const MPV_RENDER_PARAM_FLIP_Y             = 4
 
 // Build a binary mpv_render_param[] array.
 // Each entry is 16 bytes on x64: [int32 type][int32 pad][uint64 data_ptr].
@@ -230,9 +227,10 @@ function getLibmpv(): Record<string, any> {
     error_string:         lib.func('str    __cdecl mpv_error_string(int32)'),
     // void** out param — caller passes Buffer(8); mpv writes the handle into it
     // render params passed as void* — caller manually builds binary param array
-    render_context_create:              lib.func('int32  __cdecl mpv_render_context_create(void *, uint64, void *)'),
-    render_context_render:              lib.func('int32  __cdecl mpv_render_context_render(uint64, void *)'),
-    render_context_free:                lib.func('void   __cdecl mpv_render_context_free(uint64)'),
+    render_context_create:       lib.func('int32 __cdecl mpv_render_context_create(void *, uint64, void *)'),
+    render_context_render:       lib.func('int32 __cdecl mpv_render_context_render(uint64, void *)'),
+    render_context_report_swap:  lib.func('void  __cdecl mpv_render_context_report_swap(uint64)'),
+    render_context_free:         lib.func('void  __cdecl mpv_render_context_free(uint64)'),
   }
   return _libmpv
 }
@@ -244,7 +242,10 @@ function getWin32(): Record<string, any> {
   if (_w32) return _w32
   const u32 = koffi.load('user32.dll')
   const g32 = koffi.load('gdi32.dll')
+  const ogl = koffi.load('opengl32.dll')
+  const k32 = koffi.load('kernel32.dll')
   _w32 = {
+    // user32 — window management
     CreateWindowExW: u32.func('uint64 __stdcall CreateWindowExW(uint64, str16, str16, uint32, int, int, int, int, uint64, uint64, uint64, uint64)'),
     SetWindowPos:    u32.func('bool   __stdcall SetWindowPos(uint64, uint64, int, int, int, int, uint32)'),
     ShowWindow:      u32.func('bool   __stdcall ShowWindow(uint64, int)'),
@@ -254,7 +255,18 @@ function getWin32(): Record<string, any> {
     GetDC:           u32.func('uint64 __stdcall GetDC(uint64)'),
     ReleaseDC:       u32.func('int32  __stdcall ReleaseDC(uint64, uint64)'),
     ValidateRect:    u32.func('bool   __stdcall ValidateRect(uint64, uint64)'),
-    StretchDIBits:   g32.func('int32  __stdcall StretchDIBits(uint64, int, int, int, int, int, int, int, int, void *, void *, uint32, uint32)'),
+    // gdi32 — pixel format + swap
+    ChoosePixelFormat: g32.func('int32 __stdcall ChoosePixelFormat(uint64, void *)'),
+    SetPixelFormat:    g32.func('bool  __stdcall SetPixelFormat(uint64, int32, void *)'),
+    SwapBuffers:       g32.func('bool  __stdcall SwapBuffers(uint64)'),
+    // opengl32 — WGL context management + proc address loader
+    wglCreateContext:  ogl.func('uint64 __cdecl wglCreateContext(uint64)'),
+    wglDeleteContext:  ogl.func('bool   __cdecl wglDeleteContext(uint64)'),
+    wglMakeCurrent:    ogl.func('bool   __cdecl wglMakeCurrent(uint64, uint64)'),
+    wglGetProcAddress: ogl.func('uint64 __cdecl wglGetProcAddress(str)'),
+    // kernel32 — fallback for core GL functions wglGetProcAddress won't return
+    GetModuleHandleA:  k32.func('uint64 __stdcall GetModuleHandleA(str)'),
+    GetProcAddress:    k32.func('uint64 __stdcall GetProcAddress(uint64, str)'),
   }
   return _w32
 }
@@ -267,16 +279,11 @@ export class MpvController extends EventEmitter {
   private renderCtx: bigint = 0n
   private pollTimer: ReturnType<typeof setInterval> | null = null
 
-  // Windows — pixel buffer for SW render
-  private pixelBuf: Buffer | null = null
-  private pixelW = 0
-  private pixelH = 0
+  // Windows — GL render
+  private glCtx: bigint = 0n           // HGLRC — WGL rendering context
+  private getProcAddrCb: unknown = null  // koffi callback; kept alive for render context lifetime
   private currentW = 0
   private currentH = 0
-  // Kept as instance vars so GC doesn't collect them while an async render is in flight
-  private paramSizeBuf = Buffer.alloc(8)
-  private paramFmtBuf = Buffer.from('bgr0\0')
-  private paramStrideBuf = Buffer.alloc(8)
 
   // Seek settle debounce — suppress intermediate time-pos events after a seek
   private lastSeekTime = 0
@@ -322,7 +329,7 @@ export class MpvController extends EventEmitter {
     }
   }
 
-  // Windows: libmpv SW render path
+  // Windows: libmpv GL render path
   private async launchLibmpv(): Promise<void> {
     const api = getLibmpv()
 
@@ -339,7 +346,7 @@ export class MpvController extends EventEmitter {
       ['osd-level',              '0'],
       ['input-default-bindings', 'no'],
       ['input-vo-keyboard',      'no'],
-      ['hwdec',                  'no'],    // SW render: no GPU readback needed; CPU decode is fast and non-blocking
+      ['hwdec',                  'auto'],   // GL render: full GPU decode pipeline
       ['vo',                     'libmpv'],   // required for render API
     ]
     for (const [k, v] of opts) {
@@ -370,21 +377,61 @@ export class MpvController extends EventEmitter {
     ) as bigint
     if (!this.containerHwnd) throw new Error('Failed to create WS_CHILD window')
 
-    // WS_CLIPCHILDREN on the main window so GDI clips around our child area
+    // WS_CLIPCHILDREN on the main window so the GL child clips correctly
     const mainStyle = win32.GetWindowLongW(mainHwnd, GWL_STYLE) as number
     win32.SetWindowLongW(mainHwnd, GWL_STYLE, mainStyle | WS_CLIPCHILDREN)
 
-    // Create SW render context
-    // Use buildMpvRenderParams to embed Buffer addresses directly (bypasses koffi struct marshaling)
-    const swStr = Buffer.from('sw\0')
+    // ── WGL context setup ──────────────────────────────────────────────────────
+    const setupDc = win32.GetDC(this.containerHwnd) as bigint
+
+    // PIXELFORMATDESCRIPTOR (40 bytes, written as a plain Buffer → passed as void*)
+    // PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER = 0x25
+    const pfd = Buffer.alloc(40)
+    pfd.writeUInt16LE(40,         0)   // nSize
+    pfd.writeUInt16LE(1,          2)   // nVersion
+    pfd.writeUInt32LE(0x00000025, 4)   // dwFlags
+    pfd.writeUInt8(0,             8)   // iPixelType = PFD_TYPE_RGBA
+    pfd.writeUInt8(32,            9)   // cColorBits
+    pfd.writeUInt8(24,           22)   // cDepthBits
+
+    const pixelFmt = win32.ChoosePixelFormat(setupDc, pfd) as number
+    if (pixelFmt === 0) throw new Error('ChoosePixelFormat failed')
+    win32.SetPixelFormat(setupDc, pixelFmt, pfd)
+
+    this.glCtx = win32.wglCreateContext(setupDc) as bigint
+    if (!this.glCtx) throw new Error('wglCreateContext failed')
+
+    // Make context current so wglGetProcAddress works during render context init
+    win32.wglMakeCurrent(setupDc, this.glCtx)
+
+    // ── mpv GL render context ──────────────────────────────────────────────────
+    // get_proc_address is called synchronously within mpv_render_context_create,
+    // which we invoke from the JS main thread — so this callback is safe on V8.
+    const oglModule = win32.GetModuleHandleA('opengl32.dll') as bigint
+    const GetProcAddrProto = koffi.proto('void * __cdecl GetProcAddrCb(void *, str)')
+    this.getProcAddrCb = koffi.register((_ctx: unknown, name: string): bigint => {
+      let ptr = win32.wglGetProcAddress(name) as bigint
+      if (!ptr) ptr = win32.GetProcAddress(oglModule, name) as bigint
+      return ptr
+    }, koffi.pointer(GetProcAddrProto))
+
+    // mpv_opengl_init_params: { void* get_proc_address (8 bytes), void* ctx (8 bytes, null) }
+    const oglInitParams = Buffer.alloc(16)
+    oglInitParams.writeBigUInt64LE(koffi.address(this.getProcAddrCb), 0)
+
+    const glStr = Buffer.from('opengl\0')
     const initParams = buildMpvRenderParams([
-      { type: MPV_RENDER_PARAM_API_TYPE, data: swStr },
+      { type: MPV_RENDER_PARAM_API_TYPE,           data: glStr },
+      { type: MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, data: oglInitParams },
     ])
-    // Pass an 8-byte Buffer as the void** out param; mpv writes the handle into it
+
     const rcBuf = Buffer.alloc(8)
     const rcErr = api.render_context_create(rcBuf, this.mpvCtx, initParams) as number
-    if (rcErr !== 0) throw new Error(`mpv_render_context_create failed: ${rcErr}`)
+    if (rcErr !== 0) throw new Error(`mpv_render_context_create (GL) failed: ${rcErr}`)
     this.renderCtx = rcBuf.readBigUInt64LE(0)
+
+    win32.wglMakeCurrent(0n, 0n)
+    win32.ReleaseDC(this.containerHwnd, setupDc)
 
     // Poll mpv event queue + render every tick
     this.pollTimer = setInterval(() => this.drainEvents(), 8)
@@ -524,66 +571,42 @@ export class MpvController extends EventEmitter {
     }
   }
 
-  // ─── libmpv render + GDI paint (Windows) ────────────────────────────────────
+  // ─── libmpv GL render (Windows) ─────────────────────────────────────────────
 
   private renderFrame(): void {
-    if (!this.renderCtx || this.videoHidden) return
-    const w = Math.max(1, this.pixelW)
-    const h = Math.max(1, this.pixelH)
-    const stride = w * 4
+    if (!this.renderCtx || !this.containerHwnd || this.videoHidden) return
+    const w = Math.max(1, this.currentW)
+    const h = Math.max(1, this.currentH)
 
-    if (!this.pixelBuf || this.pixelBuf.length !== stride * h) {
-      this.pixelBuf = Buffer.alloc(stride * h)
-    }
-
-    // Update instance-variable param buffers (stay alive across the async C call)
-    this.paramSizeBuf.writeInt32LE(w, 0)
-    this.paramSizeBuf.writeInt32LE(h, 4)
-    this.paramStrideBuf.writeBigUInt64LE(BigInt(stride), 0)
-
-    // Build params with explicit native Buffer addresses — bypasses koffi struct marshaling
-    const renderParams = buildMpvRenderParams([
-      { type: MPV_RENDER_PARAM_SW_SIZE,    data: this.paramSizeBuf },
-      { type: MPV_RENDER_PARAM_SW_FORMAT,  data: this.paramFmtBuf },
-      { type: MPV_RENDER_PARAM_SW_STRIDE,  data: this.paramStrideBuf },
-      { type: MPV_RENDER_PARAM_SW_POINTER, data: this.pixelBuf! },
-    ])
-
-    const api = getLibmpv()
-    const rc = api.render_context_render(this.renderCtx, renderParams) as number
-    if (rc !== 0) return
-    this.paintToHwnd(w, h, stride)
-  }
-
-  private paintToHwnd(srcW: number, srcH: number, _stride: number): void {
-    if (!this.containerHwnd || !this.pixelBuf) return
     const win32 = getWin32()
     const dc = win32.GetDC(this.containerHwnd) as bigint
     if (!dc) return
     try {
-      // BITMAPINFOHEADER (40 bytes) + BITMAPINFO padding
-      const bmi = Buffer.alloc(44)
-      bmi.writeUInt32LE(40, 0)      // biSize
-      bmi.writeInt32LE(srcW, 4)     // biWidth
-      bmi.writeInt32LE(-srcH, 8)    // biHeight (negative = top-down scan order)
-      bmi.writeUInt16LE(1, 12)      // biPlanes
-      bmi.writeUInt16LE(32, 14)     // biBitCount
-      // biCompression=0 (BI_RGB), remaining fields default to 0
+      win32.wglMakeCurrent(dc, this.glCtx)
 
-      const dstW = Math.max(1, this.currentW)
-      const dstH = Math.max(1, this.currentH)
+      // mpv_opengl_fbo: { int fbo, int w, int h, int internal_format } (16 bytes)
+      const fboBuf = Buffer.alloc(16)
+      fboBuf.writeInt32LE(0, 0)   // fbo = 0 (default framebuffer)
+      fboBuf.writeInt32LE(w, 4)
+      fboBuf.writeInt32LE(h, 8)
+      fboBuf.writeInt32LE(0, 12)  // internal_format = 0 (driver default)
 
-      win32.StretchDIBits(
-        dc,
-        0, 0, dstW, dstH,     // dest rect
-        0, 0, srcW, srcH,     // src rect
-        this.pixelBuf,
-        bmi,
-        0,           // DIB_RGB_COLORS
-        0x00CC0020   // SRCCOPY
-      )
-      // Mark window as clean so the Static wndproc's WM_PAINT doesn't overwrite with white
-      win32.ValidateRect(this.containerHwnd, 0n)
+      const flipYBuf = Buffer.alloc(4)
+      flipYBuf.writeInt32LE(1, 0)  // flip_y = 1 (GL origin is bottom-left)
+
+      const renderParams = buildMpvRenderParams([
+        { type: MPV_RENDER_PARAM_OPENGL_FBO, data: fboBuf },
+        { type: MPV_RENDER_PARAM_FLIP_Y,     data: flipYBuf },
+      ])
+
+      const rc = getLibmpv().render_context_render(this.renderCtx, renderParams) as number
+      if (rc === 0) {
+        win32.SwapBuffers(dc)
+        getLibmpv().render_context_report_swap(this.renderCtx)
+        // Suppress the Static wndproc's WM_PAINT so it doesn't overwrite with white
+        win32.ValidateRect(this.containerHwnd, 0n)
+      }
+      win32.wglMakeCurrent(0n, 0n)
     } finally {
       win32.ReleaseDC(this.containerHwnd, dc)
     }
@@ -626,11 +649,8 @@ export class MpvController extends EventEmitter {
   async openFile(path: string): Promise<void> {
     this.fileOpened = true
     if (process.platform === 'win32') {
-      this.pixelW = Math.max(1, this.currentW)
-      this.pixelH = Math.max(1, this.currentH)
       const escaped = path.replace(/\\/g, '/').replace(/"/g, '\\"')
-      const cmd = `loadfile "${escaped}"`
-      const cmdErr = getLibmpv().command_string(this.mpvCtx, cmd) as number
+      getLibmpv().command_string(this.mpvCtx, `loadfile "${escaped}"`)
     } else {
       this.pauseOnLoad = true
       await this.ipc.send(['loadfile', path, 'replace'])
@@ -712,15 +732,13 @@ export class MpvController extends EventEmitter {
     if (process.platform === 'win32') {
       if (!this.containerHwnd) return
       if (this.fileOpened) {
-        this.pixelW = w
-        this.pixelH = h
         this.videoHidden = false   // must clear before ShowWindow so renderFrame() is allowed
         const win32 = getWin32()
         win32.ShowWindow(this.containerHwnd, SW_SHOWNOACTIVATE)
         win32.SetWindowPos(this.containerHwnd, 0n, rx, ry, w, h, SWP_NOACTIVATE)
-        // Paint last frame immediately; ValidateRect inside paintToHwnd suppresses the
-        // subsequent WM_PAINT that ShowWindow queues for the Static wndproc.
-        if (this.renderCtx && this.pixelBuf) this.renderFrame()
+        // Re-render immediately at new size; ValidateRect inside renderFrame suppresses
+        // the subsequent WM_PAINT that ShowWindow queues for the Static wndproc.
+        if (this.renderCtx) this.renderFrame()
       }
     } else {
       if (!this.containerWin || this.containerWin.isDestroyed()) return
@@ -748,6 +766,8 @@ export class MpvController extends EventEmitter {
       if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null }
       if (this.seekSettleTimer) { clearTimeout(this.seekSettleTimer); this.seekSettleTimer = null }
       if (this.renderCtx) { getLibmpv().render_context_free(this.renderCtx); this.renderCtx = 0n }
+      if (this.glCtx) { getWin32().wglDeleteContext(this.glCtx); this.glCtx = 0n }
+      if (this.getProcAddrCb) { koffi.unregister(this.getProcAddrCb); this.getProcAddrCb = null }
       if (this.mpvCtx) { getLibmpv().terminate_destroy(this.mpvCtx); this.mpvCtx = 0n }
       if (this.containerHwnd) { getWin32().DestroyWindow(this.containerHwnd); this.containerHwnd = 0n }
     } else {
