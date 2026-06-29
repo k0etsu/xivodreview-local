@@ -124,9 +124,9 @@ const showHotkeyHelp = ref(false)
 const missingVideoPath = ref<string | null>(null)
 const playerBackend = ref<'mpv' | 'html5'>('mpv')
 
-// Hide mpv's WS_CHILD while any modal is open. The child renders above all
-// DOM content (WS_CHILD sits above the parent's GDI surface regardless of
-// CSS z-index), so modals must hide it to remain interactive.
+// Hide mpv's WS_CHILD while any modal is open. WS_CHILD windows always render
+// above the parent window's client area regardless of CSS z-index, so modals
+// must hide it to remain interactive and visible.
 watch([showSettings, showHotkeyHelp, missingVideoPath], ([s, h, m]) => {
   if (playerBackend.value === 'mpv') window.api.mpvSetHidden(s || h || !!m)
 })
