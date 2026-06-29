@@ -1,5 +1,9 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 
+// Suppress EPIPE errors on stdout/stderr (can happen in dev mode with piped output)
+process.stdout.on('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
+process.stderr.on('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
+
 // Must be called before app is ready. Disables Chrome's DirectComposition
 // GPU overlay so mpv's WS_CHILD window (via --wid) is not covered.
 if (process.platform === 'win32') app.disableHardwareAcceleration()
@@ -70,21 +74,26 @@ function createWindow(): void {
 
   function updateMpvBounds() {
     if (!mpv) return
-    const cb = mainWindow.getContentBounds()
-    mpv.setVideoBounds(
-      cb.x + vpBounds.left,
-      cb.y + vpBounds.top,
-      vpBounds.width,
-      vpBounds.height
-    )
+    if (process.platform === 'win32') {
+      // WS_CHILD coordinates are relative to the parent's client area.
+      // vpBounds from getBoundingClientRect() is already client-area-relative
+      // on a frameless window, so no window-origin offset is needed.
+      // The child also moves with the parent automatically — no 'move' listener needed.
+      mpv.setVideoBounds(vpBounds.left, vpBounds.top, vpBounds.width, vpBounds.height)
+    } else {
+      // BrowserWindow (macOS/Linux) — needs absolute screen coordinates.
+      const cb = mainWindow.getContentBounds()
+      mpv.setVideoBounds(cb.x + vpBounds.left, cb.y + vpBounds.top, vpBounds.width, vpBounds.height)
+    }
   }
 
-  mainWindow.on('move',   updateMpvBounds)
+  if (process.platform !== 'win32') mainWindow.on('move', updateMpvBounds)
   mainWindow.on('resize', updateMpvBounds)
 
   if (mpv) {
     mainWindow.on('minimize', () => mpv.hideVideo())
     mainWindow.on('restore',  () => updateMpvBounds())
+
 
     // Launch mpv eagerly — should be connected before the user opens a file
     mpv.launch(getMpvBin())

@@ -14,7 +14,8 @@
   "dependencies": {
     "@electron-toolkit/tsconfig": "^2.0.0",
     "@electron-toolkit/utils": "^4.0.0",
-    "electron-store": "^8.2.0"
+    "electron-store": "^8.2.0",
+    "koffi": "^3.0.2"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",
@@ -37,14 +38,22 @@
       {
         "from": "resources/mpv.exe",
         "to": "mpv.exe",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/libmpv-2.dll",
+        "to": "libmpv-2.dll"
       }
     ],
     "win": {
       "target": [
         {
           "target": "zip",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "artifactName": "${productName}.${version}.${ext}",
@@ -53,7 +62,10 @@
     "mac": {
       "target": {
         "target": "dmg",
-        "arch": ["x64", "arm64"]
+        "arch": [
+          "x64",
+          "arm64"
+        ]
       },
       "icon": "resources/icon.png",
       "category": "public.app-category.utilities"
