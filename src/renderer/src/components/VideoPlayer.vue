@@ -187,6 +187,8 @@ function onMpvTracks(raw: unknown[]) {
   currentAudioTrackIndex.value = sel >= 0 ? sel : 0
 }
 function onMpvFileLoaded() {
+  // Always start paused; IPC is async so this runs after mpv's event drain completes
+  window.api.mpvPause().catch(() => {})
   if (pendingSeek !== null) {
     window.api.mpvSeek(pendingSeek, 'absolute').catch(() => {})
     pendingSeek = null

@@ -191,9 +191,6 @@ const MpvEventProperty = koffi.struct('MpvEventProperty', {
   data:   'void *', // points to typed value; decoded per format below
 })
 
-// Prototype for mpv_render_update_fn callback (name inline, koffi v3 syntax)
-const UpdateFnProto = koffi.proto('void __cdecl UpdateFn(void *)')
-
 // ─── koffi lazy loaders ───────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -234,10 +231,7 @@ function getLibmpv(): Record<string, any> {
     // void** out param — caller passes Buffer(8); mpv writes the handle into it
     // render params passed as void* — caller manually builds binary param array
     render_context_create:              lib.func('int32  __cdecl mpv_render_context_create(void *, uint64, void *)'),
-    render_context_set_update_callback: lib.func('mpv_render_context_set_update_callback', 'void', ['uint64', koffi.pointer(UpdateFnProto), 'void *']),
-    render_context_update:              lib.func('uint32 __cdecl mpv_render_context_update(uint64)'),
     render_context_render:              lib.func('int32  __cdecl mpv_render_context_render(uint64, void *)'),
-    render_context_report_swap:         lib.func('void   __cdecl mpv_render_context_report_swap(uint64)'),
     render_context_free:                lib.func('void   __cdecl mpv_render_context_free(uint64)'),
   }
   return _libmpv
@@ -259,6 +253,7 @@ function getWin32(): Record<string, any> {
     GetWindowLongW:  u32.func('int32  __stdcall GetWindowLongW(uint64, int32)'),
     GetDC:           u32.func('uint64 __stdcall GetDC(uint64)'),
     ReleaseDC:       u32.func('int32  __stdcall ReleaseDC(uint64, uint64)'),
+    ValidateRect:    u32.func('bool   __stdcall ValidateRect(uint64, uint64)'),
     StretchDIBits:   g32.func('int32  __stdcall StretchDIBits(uint64, int, int, int, int, int, int, int, int, void *, void *, uint32, uint32)'),
   }
   return _w32
@@ -270,7 +265,6 @@ export class MpvController extends EventEmitter {
   // Windows — libmpv handles (BigInt = uint64 pointer values)
   private mpvCtx: bigint = 0n
   private renderCtx: bigint = 0n
-  private updateCb: unknown = null
   private pollTimer: ReturnType<typeof setInterval> | null = null
 
   // Windows — pixel buffer for SW render
@@ -283,8 +277,13 @@ export class MpvController extends EventEmitter {
   private paramSizeBuf = Buffer.alloc(8)
   private paramFmtBuf = Buffer.from('bgr0\0')
   private paramStrideBuf = Buffer.alloc(8)
-  private renderInProgress = false
-  private needsRender = false
+
+  // Seek settle debounce — suppress intermediate time-pos events after a seek
+  private lastSeekTime = 0
+  private seekSettleTimer: ReturnType<typeof setTimeout> | null = null
+
+  // Track modal/overlay visibility to skip rendering when WS_CHILD is hidden
+  private videoHidden = false
 
   // Windows — WS_CHILD HWND
   private containerHwnd: bigint = 0n
@@ -387,14 +386,7 @@ export class MpvController extends EventEmitter {
     if (rcErr !== 0) throw new Error(`mpv_render_context_create failed: ${rcErr}`)
     this.renderCtx = rcBuf.readBigUInt64LE(0)
 
-    // Register update callback — koffi marshals cross-thread call to JS event loop
-    this.updateCb = koffi.register(
-      (): void => { this.scheduleRender() },
-      koffi.pointer(UpdateFnProto)
-    )
-    api.render_context_set_update_callback(this.renderCtx, this.updateCb, null)
-
-    // Poll mpv event queue
+    // Poll mpv event queue + render every tick
     this.pollTimer = setInterval(() => this.drainEvents(), 8)
 
     this.readyResolve()
@@ -479,9 +471,10 @@ export class MpvController extends EventEmitter {
         }
       }
     }
-    // Render after draining — ensures mpv's VO thread has processed events first
-    if (this.needsRender && !this.renderInProgress && this.containerHwnd) {
-      this.needsRender = false
+    // Render every poll tick — safe because this is the Node.js main thread.
+    // Avoids the cross-thread crash that came from using mpv's render update callback
+    // (koffi synchronous callbacks execute on the calling C thread, not the JS thread).
+    if (this.renderCtx && this.fileOpened && this.containerHwnd && !this.videoHidden) {
       this.renderFrame()
     }
   }
@@ -489,8 +482,20 @@ export class MpvController extends EventEmitter {
   private handleLibmpvProperty(name: string, format: number, dataPtr: unknown): void {
     switch (name) {
       case 'time-pos':
-        if (format === MPV_FORMAT_DOUBLE)
-          this.emit('timeUpdate', koffi.decode(dataPtr, 'double') as number)
+        if (format === MPV_FORMAT_DOUBLE) {
+          const t = koffi.decode(dataPtr, 'double') as number
+          const msSinceSeek = Date.now() - this.lastSeekTime
+          if (msSinceSeek < 300) {
+            // Within settle window — debounce so only the final decoded position fires
+            if (this.seekSettleTimer) clearTimeout(this.seekSettleTimer)
+            this.seekSettleTimer = setTimeout(() => {
+              this.seekSettleTimer = null
+              this.emit('timeUpdate', t)
+            }, 60)
+          } else {
+            this.emit('timeUpdate', t)
+          }
+        }
         break
       case 'duration':
         if (format === MPV_FORMAT_DOUBLE)
@@ -521,15 +526,8 @@ export class MpvController extends EventEmitter {
 
   // ─── libmpv render + GDI paint (Windows) ────────────────────────────────────
 
-  private scheduleRender(): void {
-    if (!this.renderCtx || !this.fileOpened) return
-    const api = getLibmpv()
-    const flags = api.render_context_update(this.renderCtx) as number
-    if (flags & MPV_RENDER_UPDATE_FRAME) this.needsRender = true
-  }
-
   private renderFrame(): void {
-    if (!this.renderCtx || this.renderInProgress) return
+    if (!this.renderCtx || this.videoHidden) return
     const w = Math.max(1, this.pixelW)
     const h = Math.max(1, this.pixelH)
     const stride = w * 4
@@ -551,12 +549,9 @@ export class MpvController extends EventEmitter {
       { type: MPV_RENDER_PARAM_SW_POINTER, data: this.pixelBuf! },
     ])
 
-    this.renderInProgress = true
     const api = getLibmpv()
     const rc = api.render_context_render(this.renderCtx, renderParams) as number
-    this.renderInProgress = false
     if (rc !== 0) return
-    api.render_context_report_swap(this.renderCtx)
     this.paintToHwnd(w, h, stride)
   }
 
@@ -587,6 +582,8 @@ export class MpvController extends EventEmitter {
         0,           // DIB_RGB_COLORS
         0x00CC0020   // SRCCOPY
       )
+      // Mark window as clean so the Static wndproc's WM_PAINT doesn't overwrite with white
+      win32.ValidateRect(this.containerHwnd, 0n)
     } finally {
       win32.ReleaseDC(this.containerHwnd, dc)
     }
@@ -656,8 +653,11 @@ export class MpvController extends EventEmitter {
   }
 
   async seek(seconds: number, type: 'absolute' | 'relative' = 'absolute'): Promise<void> {
-    if (process.platform === 'win32') getLibmpv().command_string(this.mpvCtx, `seek ${seconds} ${type}`)
-    else await this.ipc.send(['seek', seconds, type])
+    if (process.platform === 'win32') {
+      this.lastSeekTime = Date.now()
+      // +exact: decode to the precise frame rather than snapping to the nearest keyframe
+      getLibmpv().command_string(this.mpvCtx, `seek ${seconds} ${type}+exact`)
+    } else await this.ipc.send(['seek', seconds, type])
   }
 
   async frameStep(): Promise<void> {
@@ -714,10 +714,12 @@ export class MpvController extends EventEmitter {
       if (this.fileOpened) {
         this.pixelW = w
         this.pixelH = h
+        this.videoHidden = false   // must clear before ShowWindow so renderFrame() is allowed
         const win32 = getWin32()
         win32.ShowWindow(this.containerHwnd, SW_SHOWNOACTIVATE)
         win32.SetWindowPos(this.containerHwnd, 0n, rx, ry, w, h, SWP_NOACTIVATE)
-        // Repaint last frame at new dimensions immediately
+        // Paint last frame immediately; ValidateRect inside paintToHwnd suppresses the
+        // subsequent WM_PAINT that ShowWindow queues for the Static wndproc.
         if (this.renderCtx && this.pixelBuf) this.renderFrame()
       }
     } else {
@@ -729,7 +731,10 @@ export class MpvController extends EventEmitter {
 
   hideVideo(): void {
     if (process.platform === 'win32') {
-      if (this.containerHwnd) getWin32().ShowWindow(this.containerHwnd, SW_HIDE)
+      if (this.containerHwnd) {
+        this.videoHidden = true
+        getWin32().ShowWindow(this.containerHwnd, SW_HIDE)
+      }
     } else {
       if (this.containerWin && !this.containerWin.isDestroyed())
         this.containerWin.setBounds({ x: -9999, y: -9999, width: 640, height: 360 })
@@ -741,8 +746,7 @@ export class MpvController extends EventEmitter {
   quit(): void {
     if (process.platform === 'win32') {
       if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      if (this.updateCb) { koffi.unregister(this.updateCb as any); this.updateCb = null }
+      if (this.seekSettleTimer) { clearTimeout(this.seekSettleTimer); this.seekSettleTimer = null }
       if (this.renderCtx) { getLibmpv().render_context_free(this.renderCtx); this.renderCtx = 0n }
       if (this.mpvCtx) { getLibmpv().terminate_destroy(this.mpvCtx); this.mpvCtx = 0n }
       if (this.containerHwnd) { getWin32().DestroyWindow(this.containerHwnd); this.containerHwnd = 0n }

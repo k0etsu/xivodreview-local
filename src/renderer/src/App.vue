@@ -450,10 +450,13 @@ function onGlobalKey(e: KeyboardEvent) {
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 onMounted(async () => {
+  // Register synchronously before any await — prevents duplicate listeners if
+  // the component remounts (HMR) while async store loads are pending.
+  document.addEventListener('keydown', onGlobalKey)
+
   playerBackend.value = ((await window.api.storeGet('playerBackend')) as 'mpv' | 'html5') ?? 'mpv'
   const stored = await window.api.storeGet('savedEncounters') as Record<string, SavedEncounter> | null
   if (stored) savedEncounters.value = stored
-  document.addEventListener('keydown', onGlobalKey)
 })
 
 onUnmounted(() => {
