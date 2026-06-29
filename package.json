@@ -34,20 +34,11 @@
       "out/**/*",
       "resources/**/*"
     ],
-    "extraResources": [
-      {
-        "from": "resources/mpv.exe",
-        "to": "mpv.exe",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
-        "from": "resources/libmpv-2.dll",
-        "to": "libmpv-2.dll"
-      }
-    ],
     "win": {
+      "extraResources": [
+        { "from": "resources/mpv.exe",      "to": "mpv.exe" },
+        { "from": "resources/libmpv-2.dll", "to": "libmpv-2.dll" }
+      ],
       "target": [
         {
           "target": "zip",
