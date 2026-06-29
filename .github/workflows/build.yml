@@ -1,0 +1,48 @@
+name: Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-win:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # libmpv-2.dll and mpv.exe are too large for git (~115 MB each).
+      # Pinned to a specific zhongfly/mpv-winbuild tag so the cache is stable
+      # and builds are reproducible. Bump MPV_TAG deliberately when updating mpv.
+      - name: Download and extract mpv binaries
+        env:
+          MPV_TAG: 2026-06-29-3f1b23abd0
+        run: |
+          $base = "https://github.com/zhongfly/mpv-winbuild/releases/download/$env:MPV_TAG"
+          $date = $env:MPV_TAG.Substring(0, 10) -replace "-", ""
+          $hash = $env:MPV_TAG.Substring(11)
+          Invoke-WebRequest "$base/mpv-x86_64-${date}-git-${hash}.7z"     -OutFile mpv.7z
+          Invoke-WebRequest "$base/mpv-dev-x86_64-${date}-git-${hash}.7z" -OutFile mpv-dev.7z
+          7z e mpv.7z     mpv.exe      -o"resources" -y
+          7z e mpv-dev.7z libmpv-2.dll -o"resources" -y
+        shell: pwsh
+
+      - name: Build (Windows)
+        run: npm run build:win
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xivodreview-${{ github.ref_name }}-win-x64
+          path: dist/*.zip
+          if-no-files-found: error
