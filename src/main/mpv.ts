@@ -284,6 +284,10 @@ export class MpvController extends EventEmitter {
   private getProcAddrCb: unknown = null  // koffi callback; kept alive for render context lifetime
   private currentW = 0
   private currentH = 0
+  // Pre-allocated render buffers — avoids per-frame allocation at 125 Hz
+  private readonly fboBuf   = Buffer.alloc(16)  // mpv_opengl_fbo contents
+  private readonly flipYBuf = Buffer.alloc(4)   // flip_y = 1
+  private renderParamsBuf: Buffer | null = null  // built once after render context is created
 
   // Seek settle debounce — suppress intermediate time-pos events after a seek
   private lastSeekTime = 0
@@ -429,6 +433,13 @@ export class MpvController extends EventEmitter {
     const rcErr = api.render_context_create(rcBuf, this.mpvCtx, initParams) as number
     if (rcErr !== 0) throw new Error(`mpv_render_context_create (GL) failed: ${rcErr}`)
     this.renderCtx = rcBuf.readBigUInt64LE(0)
+
+    // Pre-build GL render params — pointers into fboBuf/flipYBuf are stable (Buffers are C-heap-pinned)
+    this.flipYBuf.writeInt32LE(1, 0)
+    this.renderParamsBuf = buildMpvRenderParams([
+      { type: MPV_RENDER_PARAM_OPENGL_FBO, data: this.fboBuf },
+      { type: MPV_RENDER_PARAM_FLIP_Y,     data: this.flipYBuf },
+    ])
 
     win32.wglMakeCurrent(0n, 0n)
     win32.ReleaseDC(this.containerHwnd, setupDc)
@@ -584,30 +595,21 @@ export class MpvController extends EventEmitter {
     try {
       win32.wglMakeCurrent(dc, this.glCtx)
 
-      // mpv_opengl_fbo: { int fbo, int w, int h, int internal_format } (16 bytes)
-      const fboBuf = Buffer.alloc(16)
-      fboBuf.writeInt32LE(0, 0)   // fbo = 0 (default framebuffer)
-      fboBuf.writeInt32LE(w, 4)
-      fboBuf.writeInt32LE(h, 8)
-      fboBuf.writeInt32LE(0, 12)  // internal_format = 0 (driver default)
+      // Update the pre-allocated FBO buffer with current dimensions
+      this.fboBuf.writeInt32LE(0, 0)   // fbo = 0 (default framebuffer)
+      this.fboBuf.writeInt32LE(w, 4)
+      this.fboBuf.writeInt32LE(h, 8)
+      this.fboBuf.writeInt32LE(0, 12)  // internal_format = 0 (driver default)
 
-      const flipYBuf = Buffer.alloc(4)
-      flipYBuf.writeInt32LE(1, 0)  // flip_y = 1 (GL origin is bottom-left)
-
-      const renderParams = buildMpvRenderParams([
-        { type: MPV_RENDER_PARAM_OPENGL_FBO, data: fboBuf },
-        { type: MPV_RENDER_PARAM_FLIP_Y,     data: flipYBuf },
-      ])
-
-      const rc = getLibmpv().render_context_render(this.renderCtx, renderParams) as number
+      const rc = getLibmpv().render_context_render(this.renderCtx, this.renderParamsBuf!) as number
       if (rc === 0) {
         win32.SwapBuffers(dc)
         getLibmpv().render_context_report_swap(this.renderCtx)
         // Suppress the Static wndproc's WM_PAINT so it doesn't overwrite with white
         win32.ValidateRect(this.containerHwnd, 0n)
       }
-      win32.wglMakeCurrent(0n, 0n)
     } finally {
+      win32.wglMakeCurrent(0n, 0n)
       win32.ReleaseDC(this.containerHwnd, dc)
     }
   }
@@ -765,7 +767,15 @@ export class MpvController extends EventEmitter {
     if (process.platform === 'win32') {
       if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null }
       if (this.seekSettleTimer) { clearTimeout(this.seekSettleTimer); this.seekSettleTimer = null }
-      if (this.renderCtx) { getLibmpv().render_context_free(this.renderCtx); this.renderCtx = 0n }
+      // render_context_free requires the GL context to be current so mpv can delete its GL objects
+      if (this.renderCtx) {
+        const win32 = getWin32()
+        const dc = this.containerHwnd ? win32.GetDC(this.containerHwnd) as bigint : 0n
+        if (dc) win32.wglMakeCurrent(dc, this.glCtx)
+        getLibmpv().render_context_free(this.renderCtx)
+        this.renderCtx = 0n
+        if (dc) { win32.wglMakeCurrent(0n, 0n); win32.ReleaseDC(this.containerHwnd, dc) }
+      }
       if (this.glCtx) { getWin32().wglDeleteContext(this.glCtx); this.glCtx = 0n }
       if (this.getProcAddrCb) { koffi.unregister(this.getProcAddrCb); this.getProcAddrCb = null }
       if (this.mpvCtx) { getLibmpv().terminate_destroy(this.mpvCtx); this.mpvCtx = 0n }
