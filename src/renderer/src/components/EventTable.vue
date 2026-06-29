@@ -11,10 +11,10 @@
       >↗ FFLogs</a>
     </div>
 
-    <div v-if="loading" class="state-msg">Loading deaths…</div>
-    <div v-else-if="deaths.length === 0" class="state-msg muted">No deaths recorded</div>
+    <div v-if="loading && deaths.length === 0" class="state-msg">Loading deaths…</div>
+    <div v-else-if="!loading && deaths.length === 0" class="state-msg muted">No deaths recorded</div>
 
-    <table v-else>
+    <table v-if="deaths.length > 0">
       <colgroup>
         <col style="width: 30%" />
         <col style="width: 28%" />
@@ -77,7 +77,8 @@ function formatRelative(timestamp: number): string {
   border-top: 1px solid var(--border);
   overflow-y: auto;
   overflow-x: hidden;
-  max-height: 300px;
+  height: 300px;
+  flex-shrink: 0;
 }
 
 .table-header {

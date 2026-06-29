@@ -240,7 +240,8 @@ async function loadReport(code: string) {
 
 async function selectPull(fight: Fight) {
   currentPull.value = fight
-  currentDeaths.value = []
+  // Don't clear deaths — keep existing rows visible while new ones load so the
+  // table scroll position is preserved across pull selections.
 
   // Seek video
   const seekSec = (fight.startTime + videoOffset.value) / 1000
