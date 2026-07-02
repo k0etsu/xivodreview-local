@@ -1,6 +1,6 @@
 {
   "name": "xivodreview",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Local video + FFLogs raid review tool",
   "main": "./out/main/index.js",
   "scripts": {
@@ -36,8 +36,14 @@
     ],
     "win": {
       "extraResources": [
-        { "from": "resources/mpv.exe",      "to": "mpv.exe" },
-        { "from": "resources/libmpv-2.dll", "to": "libmpv-2.dll" }
+        {
+          "from": "resources/mpv.exe",
+          "to": "mpv.exe"
+        },
+        {
+          "from": "resources/libmpv-2.dll",
+          "to": "libmpv-2.dll"
+        }
       ],
       "target": [
         {
