@@ -9,12 +9,20 @@
       <div class="titlebar-actions">
         <button class="nav-btn" @click="showSettings = true" title="Settings">⚙ Settings</button>
         <button class="nav-btn" @click="openVideo" title="Open video file">📂 Open Video</button>
+      </div>
+      <div class="titlebar-actions-extra">
         <button
-          v-if="reportData"
           class="nav-btn save-btn"
+          :style="{ visibility: reportData ? 'visible' : 'hidden', pointerEvents: reportData ? 'auto' : 'none' }"
           @click="saveEncounter"
           title="Save this report + current offset so you can reload it quickly from the sidebar"
         >💾 Save</button>
+        <button
+          class="nav-btn reset-btn"
+          :style="{ visibility: (videoPath || reportData) ? 'visible' : 'hidden', pointerEvents: (videoPath || reportData) ? 'auto' : 'none' }"
+          @click="resetApp"
+          title="Reset: unload video, clear report data, and reset video offset"
+        >&#x21BB; Reset</button>
       </div>
       <!-- Win32 window controls -->
       <div class="win-controls">
@@ -48,6 +56,7 @@
             />
           </template>
         </VideoPlayer>
+        <div class="hotkey-hint" @click="showHotkeyHelp = true">? · shortcuts</div>
       </div>
 
       <!-- Right: sidebar -->
@@ -101,7 +110,6 @@
       </div>
     </div>
 
-    <div class="hotkey-hint" @click="showHotkeyHelp = true">? · shortcuts</div>
   </div>
 </template>
 
@@ -124,13 +132,6 @@ const showHotkeyHelp = ref(false)
 const missingVideoPath = ref<string | null>(null)
 const playerBackend = ref<'mpv' | 'html5'>('mpv')
 
-// Hide mpv's WS_CHILD while any modal is open. The child renders above all
-// DOM content (WS_CHILD sits above the parent's GDI surface regardless of
-// CSS z-index), so modals must hide it to remain interactive.
-watch([showSettings, showHotkeyHelp, missingVideoPath], ([s, h, m]) => {
-  if (playerBackend.value === 'mpv') window.api.mpvSetHidden(s || h || !!m)
-})
-
 const videoPath = ref<string | null>(null)
 const currentVideoTime = ref(0)
 
@@ -149,6 +150,13 @@ const videoOffset = ref(0)
 
 // Saved encounters from electron-store
 const savedEncounters = ref<Record<string, SavedEncounter>>({})
+
+// Hide mpv's WS_CHILD while any modal is open or no video is loaded.
+// WS_CHILD windows always render above the parent window's client area
+// regardless of CSS z-index, so the placeholder and modals must hide it.
+watch([showSettings, showHotkeyHelp, missingVideoPath, videoPath], ([s, h, m, vp]) => {
+  if (playerBackend.value === 'mpv') window.api.mpvSetHidden(s || h || !!m || !vp)
+})
 
 // ─── Computed ─────────────────────────────────────────────────────────────────
 
@@ -205,6 +213,19 @@ const npcMap = computed((): Map<number, string> => {
 async function openVideo() {
   const path = await window.api.openVideo()
   if (path) videoPath.value = path
+}
+
+async function resetApp() {
+  if (videoPath.value && playerBackend.value === 'mpv') {
+    await window.api.mpvCommand(['stop']).catch(() => {})
+  }
+  videoPath.value = null
+  reportCode.value = ''
+  reportData.value = null
+  reportError.value = ''
+  currentPull.value = null
+  currentDeaths.value = []
+  videoOffset.value = 0
 }
 
 function winMinimize() { window.api.windowMinimize() }
@@ -513,7 +534,16 @@ onUnmounted(() => {
   -webkit-app-region: no-drag;
 }
 
+.titlebar-actions-extra {
+  display: flex;
+  gap: 4px;
+  -webkit-app-region: no-drag;
+}
+
 .nav-btn {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
   background: transparent;
   color: var(--text-muted);
   padding: 4px 10px;
@@ -528,6 +558,8 @@ onUnmounted(() => {
 }
 .save-btn { color: #c9a227; }
 .save-btn:hover { color: #ffd700; }
+.reset-btn { color: #a04040; }
+.reset-btn:hover { color: #e05555; }
 
 /* Win32 window controls */
 .win-controls {
@@ -564,6 +596,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   background: #000;
+  position: relative;
 }
 
 .sidebar {
@@ -577,7 +610,7 @@ onUnmounted(() => {
 }
 
 .hotkey-hint {
-  position: fixed;
+  position: absolute;
   bottom: 10px;
   left: 50%;
   transform: translateX(-50%);

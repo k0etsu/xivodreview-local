@@ -29,9 +29,9 @@
       </div>
     </div>
 
-    <!-- Scrub bar (pull-relative) -->
-    <div class="scrub-bar" v-if="pullDuration > 0" @click="onScrubClick" ref="scrubBar">
-      <div class="scrub-track">
+    <!-- Scrub bar — always rendered so its height is always reserved -->
+    <div class="scrub-bar" @click="onScrubBarClick" ref="scrubBar">
+      <div v-if="pullDuration > 0" class="scrub-track">
         <div class="scrub-fill" :style="{ width: scrubPercent + '%' }" />
         <div
           v-for="(d, i) in deathMarkers"
@@ -42,13 +42,11 @@
         />
         <div class="scrub-thumb" :style="{ left: scrubPercent + '%' }" />
       </div>
-    </div>
-    <!-- Scrub bar (full video) -->
-    <div class="scrub-bar" v-else-if="duration > 0" @click="onFullScrubClick" ref="scrubBar">
-      <div class="scrub-track">
+      <div v-else-if="duration > 0" class="scrub-track">
         <div class="scrub-fill" :style="{ width: fullScrubPercent + '%' }" />
         <div class="scrub-thumb" :style="{ left: fullScrubPercent + '%' }" />
       </div>
+      <div v-else class="scrub-track" style="visibility: hidden" />
     </div>
 
     <!-- Controls -->
@@ -304,18 +302,15 @@ function reloadVideo() {
 
 // ─── Scrub bar interaction ────────────────────────────────────────────────────
 
-function onScrubClick(e: MouseEvent) {
+function onScrubBarClick(e: MouseEvent) {
   const bar = scrubBar.value
-  if (!bar || !props.currentPull) return
+  if (!bar) return
   const pct = (e.clientX - bar.getBoundingClientRect().left) / bar.getBoundingClientRect().width
-  seekTo(pullStartSeconds.value + pct * (pullDuration.value / 1000))
-}
-
-function onFullScrubClick(e: MouseEvent) {
-  const bar = scrubBar.value
-  if (!bar || duration.value === 0) return
-  const pct = (e.clientX - bar.getBoundingClientRect().left) / bar.getBoundingClientRect().width
-  seekTo(pct * duration.value)
+  if (pullDuration.value > 0) {
+    seekTo(pullStartSeconds.value + pct * (pullDuration.value / 1000))
+  } else if (duration.value > 0) {
+    seekTo(pct * duration.value)
+  }
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────

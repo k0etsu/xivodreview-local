@@ -71,9 +71,12 @@ function createWindow(): void {
   // Viewport-relative bounds of the video-container div sent by the renderer.
   // Combined with mainWindow.getContentBounds() to get absolute screen position.
   let vpBounds = { left: 0, top: 38, width: 100, height: 100 }
+  // When true, updateMpvBounds is a no-op so the renderer can show its placeholder.
+  // Cleared when a file is opened or the renderer explicitly un-hides mpv.
+  let mpvHiddenByApp = false
 
   function updateMpvBounds() {
-    if (!mpv) return
+    if (!mpv || mpvHiddenByApp) return
     if (process.platform === 'win32') {
       // WS_CHILD coordinates are relative to the parent's client area.
       // vpBounds from getBoundingClientRect() is already client-area-relative
@@ -149,8 +152,11 @@ function createWindow(): void {
     updateMpvBounds()
   })
 
-  ipcMain.handle('mpv:setHidden',    (_, hidden: boolean)                          => hidden ? mpv?.hideVideo() : updateMpvBounds())
-  ipcMain.handle('mpv:openFile',     async (_, path: string)                       => { await mpv?.openFile(path); updateMpvBounds() })
+  ipcMain.handle('mpv:setHidden',    (_, hidden: boolean)                          => {
+    mpvHiddenByApp = hidden
+    if (hidden) mpv?.hideVideo(); else updateMpvBounds()
+  })
+  ipcMain.handle('mpv:openFile',     async (_, path: string)                       => { mpvHiddenByApp = false; await mpv?.openFile(path); updateMpvBounds() })
   ipcMain.handle('mpv:play',         async ()                                       => mpv?.play())
   ipcMain.handle('mpv:pause',        async ()                                       => mpv?.pause())
   ipcMain.handle('mpv:togglePause',  async ()                                       => mpv?.togglePause())
