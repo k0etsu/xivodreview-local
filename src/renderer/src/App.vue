@@ -5,6 +5,7 @@
       <div class="titlebar-left">
         <img src="/icon.png" class="titlebar-logo" alt="" />
         <span class="brand">xivodreview</span>
+        <span class="brand-version" v-if="appVersion">v{{ appVersion }}</span>
       </div>
       <div class="titlebar-actions">
         <button class="nav-btn" @click="showSettings = true" title="Settings">⚙ Settings</button>
@@ -127,6 +128,7 @@ import type { Fight, ReportData, DeathEvent, Actor, Ability, SavedEncounter } fr
 // ─── State ────────────────────────────────────────────────────────────────────
 
 const player = ref<InstanceType<typeof VideoPlayer> | null>(null)
+const appVersion = ref('')
 const showSettings = ref(false)
 const showHotkeyHelp = ref(false)
 const missingVideoPath = ref<string | null>(null)
@@ -476,6 +478,7 @@ onMounted(async () => {
   // the component remounts (HMR) while async store loads are pending.
   document.addEventListener('keydown', onGlobalKey)
 
+  appVersion.value = await window.api.getVersion()
   playerBackend.value = ((await window.api.storeGet('playerBackend')) as 'mpv' | 'html5') ?? 'mpv'
   const stored = await window.api.storeGet('savedEncounters') as Record<string, SavedEncounter> | null
   if (stored) savedEncounters.value = stored
@@ -507,7 +510,7 @@ onUnmounted(() => {
 
 .titlebar-left {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 7px;
   padding: 0 10px;
 }
@@ -517,6 +520,7 @@ onUnmounted(() => {
   height: 18px;
   object-fit: contain;
   flex-shrink: 0;
+  align-self: center;
 }
 
 .brand {
@@ -525,6 +529,14 @@ onUnmounted(() => {
   letter-spacing: 0.3px;
   color: var(--text-primary);
   font-family: 'Segoe UI', sans-serif;
+}
+
+.brand-version {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.5;
+  font-family: 'Segoe UI', sans-serif;
+  letter-spacing: 0.2px;
 }
 
 .titlebar-actions {

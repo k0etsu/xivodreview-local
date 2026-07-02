@@ -237,6 +237,7 @@ app.whenReady().then(() => {
 
   // ─── Store / filesystem ───────────────────────────────────────────────────────
 
+  ipcMain.handle('app:getVersion', () => app.getVersion())
   ipcMain.handle('fs:exists', (_event, filePath: string) => existsSync(filePath))
   ipcMain.handle('store:get',    (_event, key: string)                => store.get(key))
   ipcMain.handle('store:set',    (_event, key: string, value: unknown) => store.set(key, value))

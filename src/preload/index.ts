@@ -1,6 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('api', {
+  // ─── App ────────────────────────────────────────────────────────────────────
+  getVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
+
   // ─── File dialog ────────────────────────────────────────────────────────────
   openVideo: (): Promise<string | null> => ipcRenderer.invoke('dialog:openVideo'),
 
