@@ -24,6 +24,22 @@
 
         <div class="divider" />
 
+        <div class="section">
+          <div class="section-label">Pull percentage display</div>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" value="fight" :checked="pullPctMode === 'fight'" @change="setPullPctMode('fight')" />
+              Fight% <span class="radio-hint">(% of fight remaining overall)</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" value="boss" :checked="pullPctMode === 'boss'" @change="setPullPctMode('boss')" />
+              Boss% <span class="radio-hint">(% of boss HP remaining in current phase)</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="divider" />
+
         <p class="help-text">
           FFLogs API credentials are required to load reports.
           Get yours at
@@ -60,6 +76,7 @@ import { ref, onMounted } from 'vue'
 
 const emit = defineEmits<{
   (e: 'close'): void
+  (e: 'pullPctModeChange', mode: 'fight' | 'boss'): void
 }>()
 
 const clientId = ref('')
@@ -69,17 +86,25 @@ const testing = ref(false)
 const testResult = ref<{ ok: boolean; error?: string } | null>(null)
 const playerBackend = ref<'mpv' | 'html5'>('mpv')
 const backendChanged = ref(false)
+const pullPctMode = ref<'fight' | 'boss'>('fight')
 
 onMounted(async () => {
   clientId.value = (await window.api.storeGet('fflogsClientId') as string) ?? ''
   clientSecret.value = (await window.api.storeGet('fflogsClientSecret') as string) ?? ''
   playerBackend.value = ((await window.api.storeGet('playerBackend')) as 'mpv' | 'html5') ?? 'mpv'
+  pullPctMode.value = ((await window.api.storeGet('pullPctMode')) as 'fight' | 'boss') ?? 'fight'
 })
 
 async function setBackend(val: 'mpv' | 'html5') {
   playerBackend.value = val
   await window.api.storeSet('playerBackend', val)
   backendChanged.value = true
+}
+
+async function setPullPctMode(val: 'fight' | 'boss') {
+  pullPctMode.value = val
+  await window.api.storeSet('pullPctMode', val)
+  emit('pullPctModeChange', val)
 }
 
 async function save() {

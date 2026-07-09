@@ -40,7 +40,7 @@
                 @click="$emit('selectPull', fight)"
                 :title="`${fight.name} — Pull #${fight.pullNum} — ${formatDuration(fight.startTime, fight.endTime)}`"
               >
-                <PullCell :fight="fight" :report-start="reportStart" />
+                <PullCell :fight="fight" :report-start="reportStart" :pull-pct-mode="pullPctMode" />
               </button>
             </div>
           </div>
@@ -57,7 +57,7 @@
               @click="$emit('selectPull', fight)"
               :title="`${fight.name} — Pull #${fight.pullNum} — ${formatDuration(fight.startTime, fight.endTime)}`"
             >
-              <PullCell :fight="fight" :report-start="reportStart" />
+              <PullCell :fight="fight" :report-start="reportStart" :pull-pct-mode="pullPctMode" />
             </button>
           </div>
         </template>
@@ -76,6 +76,7 @@ const props = defineProps<{
   currentPull: Fight | null
   reportStart: number
   phases: PhaseInfo[]
+  pullPctMode: 'fight' | 'boss'
 }>()
 
 defineEmits<{ (e: 'selectPull', fight: Fight): void }>()

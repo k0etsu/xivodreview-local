@@ -78,6 +78,7 @@
           :current-pull="currentPull"
           :report-start="reportData?.startTime ?? 0"
           :phases="reportData?.phases ?? []"
+          :pull-pct-mode="pullPctMode"
           @select-pull="selectPull"
         />
 
@@ -93,7 +94,7 @@
       </div>
     </div>
 
-    <SettingsPanel v-if="showSettings" @close="showSettings = false" />
+    <SettingsPanel v-if="showSettings" @close="showSettings = false" @pull-pct-mode-change="v => pullPctMode = v" />
     <HotkeyHelp v-if="showHotkeyHelp" :backend="playerBackend" @close="showHotkeyHelp = false" />
 
     <div v-if="missingVideoPath" class="modal-overlay" @click.self="missingVideoPath = null">
@@ -133,6 +134,7 @@ const showSettings = ref(false)
 const showHotkeyHelp = ref(false)
 const missingVideoPath = ref<string | null>(null)
 const playerBackend = ref<'mpv' | 'html5'>('mpv')
+const pullPctMode = ref<'fight' | 'boss'>('fight')
 
 const videoPath = ref<string | null>(null)
 const currentVideoTime = ref(0)
@@ -480,6 +482,7 @@ onMounted(async () => {
 
   appVersion.value = await window.api.getVersion()
   playerBackend.value = ((await window.api.storeGet('playerBackend')) as 'mpv' | 'html5') ?? 'mpv'
+  pullPctMode.value = ((await window.api.storeGet('pullPctMode')) as 'fight' | 'boss') ?? 'fight'
   const stored = await window.api.storeGet('savedEncounters') as Record<string, SavedEncounter> | null
   if (stored) savedEncounters.value = stored
 })

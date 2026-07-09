@@ -3,7 +3,7 @@
   <div class="btn-top">
     <span v-if="fight.kill" class="kill-pct">KILL</span>
     <span v-else class="pct" :class="'rarity-' + fight.rarity">
-      {{ fight.fightPercentage?.toFixed(1) ?? '?' }}%
+      {{ (pullPctMode === 'boss' ? fight.bossPercentage : fight.fightPercentage)?.toFixed(1) ?? '?' }}%
     </span>
     <span class="duration">({{ formatDuration(fight.startTime, fight.endTime) }})</span>
   </div>
@@ -24,6 +24,7 @@ import type { Fight } from '../types'
 const props = defineProps<{
   fight: Fight
   reportStart: number
+  pullPctMode: 'fight' | 'boss'
 }>()
 
 function formatDuration(startMs: number, endMs: number): string {
