@@ -30,7 +30,7 @@
     </div>
 
     <!-- Scrub bar — always rendered so its height is always reserved -->
-    <div class="scrub-bar" @click="onScrubBarClick" ref="scrubBar">
+    <div class="scrub-bar" @click="onScrubBarClick" @mousemove="onScrubHover" @mouseleave="scrubHoverX = null" ref="scrubBar">
       <div v-if="pullDuration > 0" class="scrub-track">
         <div class="scrub-fill" :style="{ width: scrubPercent + '%' }" />
         <div
@@ -71,7 +71,13 @@
         </svg>
       </button>
 
-      <span class="time-display">{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</span>
+      <span class="time-display">
+        <template v-if="scrubHoverX !== null">
+          <span class="hover-time">{{ scrubHoverTime }}</span> / {{ formatTime(pullDuration > 0 ? pullDuration / 1000 : duration) }}
+        </template>
+        <template v-else-if="pullDuration > 0">{{ formatTime(Math.max(0, currentTime - pullStartSeconds)) }} / {{ formatTime(pullDuration / 1000) }}</template>
+        <template v-else>{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</template>
+      </span>
 
       <div class="volume-group">
         <button class="ctrl-btn" @click="toggleMute" title="Mute">
@@ -138,6 +144,10 @@ const currentAudioTrackIndex = ref(0)
 
 // Pending seek target (seconds) to apply after the next file-loaded event
 let pendingSeek: number | null = null
+
+// Scrub bar hover tooltip
+const scrubHoverX    = ref<number | null>(null)
+const scrubHoverTime = ref('')
 
 // ─── Scrub / pull computeds ───────────────────────────────────────────────────
 
@@ -313,6 +323,21 @@ function onScrubBarClick(e: MouseEvent) {
   }
 }
 
+function onScrubHover(e: MouseEvent) {
+  const bar = scrubBar.value
+  if (!bar) return
+  const rect = bar.getBoundingClientRect()
+  if (pullDuration.value === 0 && duration.value === 0) { scrubHoverX.value = null; return }
+  const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+  // Position is relative to the scrub-track (8px padding each side inside the bar)
+  const trackPad = 8
+  const trackWidth = rect.width - trackPad * 2
+  scrubHoverX.value = Math.max(0, Math.min(trackWidth, (e.clientX - rect.left) - trackPad))
+  scrubHoverTime.value = pullDuration.value > 0
+    ? formatTime(pct * (pullDuration.value / 1000))
+    : formatTime(pct * duration.value)
+}
+
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 function formatTime(s: number): string {
@@ -433,6 +458,7 @@ defineExpose({
 
 /* Scrub bar */
 .scrub-bar {
+  position: relative;
   height: 28px;
   padding: 10px 8px;
   cursor: pointer;
@@ -472,6 +498,10 @@ defineExpose({
   border-radius: 1px;
   z-index: 1;
 }
+.hover-time {
+  color: var(--text-primary);
+  font-weight: 600;
+}
 
 /* Controls */
 .controls {
@@ -500,6 +530,9 @@ defineExpose({
   white-space: nowrap;
   margin: 0 8px;
   font-variant-numeric: tabular-nums;
+  display: inline-block;
+  min-width: 90px;
+  text-align: right;
 }
 
 .volume-group {
