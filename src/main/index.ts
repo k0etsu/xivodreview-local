@@ -4,10 +4,6 @@ import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 process.stdout.on('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
 process.stderr.on('error', (err: NodeJS.ErrnoException) => { if (err.code !== 'EPIPE') throw err })
 
-// Must be called before app is ready. Disables Chrome's DirectComposition
-// GPU overlay so mpv's WS_CHILD window (via --wid) is not covered.
-if (process.platform === 'win32') app.disableHardwareAcceleration()
-
 if (process.platform === 'win32') app.setAppUserModelId('com.xivodreview.local')
 import { join } from 'path'
 import { existsSync } from 'fs'
@@ -147,6 +143,8 @@ function createWindow(): void {
 
   // Renderer reports the video-container div's bounds (viewport-relative).
   // We combine this with the window's content bounds to position the mpv child window.
+  ipcMain.on('mpv:frameConsumed', () => mpv?.frameConsumed())
+
   ipcMain.on('mpv:setViewportBounds', (_, bounds: typeof vpBounds) => {
     vpBounds = bounds
     updateMpvBounds()

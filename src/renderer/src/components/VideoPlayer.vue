@@ -5,6 +5,7 @@
          mpv mode  — transparent click target; native child window sits on top.
          html5 mode — contains a real <video> element. -->
     <div class="video-container" ref="videoArea" @click="togglePlay">
+      <canvas v-if="backend === 'mpv'" ref="videoCanvas" class="video-canvas" />
       <video
         v-if="backend === 'html5' && src"
         ref="videoEl"
@@ -127,10 +128,11 @@ const emit = defineEmits<{
 
 // ─── Refs ─────────────────────────────────────────────────────────────────────
 
-const wrapper   = ref<HTMLDivElement | null>(null)
-const videoArea = ref<HTMLDivElement | null>(null)
-const scrubBar  = ref<HTMLDivElement | null>(null)
-const videoEl   = ref<HTMLVideoElement | null>(null)
+const wrapper     = ref<HTMLDivElement | null>(null)
+const videoArea   = ref<HTMLDivElement | null>(null)
+const scrubBar    = ref<HTMLDivElement | null>(null)
+const videoEl     = ref<HTMLVideoElement | null>(null)
+const videoCanvas = ref<HTMLCanvasElement | null>(null)
 
 const playing     = ref(false)
 const currentTime = ref(0)
@@ -370,6 +372,23 @@ onMounted(() => {
   wrapper.value?.focus()
 
   if (props.backend === 'mpv') {
+    let canvasCtx: CanvasRenderingContext2D | null = null
+    window.api.mpvOnFrame(({ width, height, data }) => {
+      const canvas = videoCanvas.value
+      if (!canvas) { window.api.mpvFrameConsumed(); return }
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width
+        canvas.height = height
+        canvasCtx = null
+      }
+      if (!canvasCtx) canvasCtx = canvas.getContext('2d')
+      if (!canvasCtx) { window.api.mpvFrameConsumed(); return }
+      canvasCtx.putImageData(
+        new ImageData(new Uint8ClampedArray(data.buffer, data.byteOffset, data.byteLength), width, height),
+        0, 0
+      )
+      window.api.mpvFrameConsumed()
+    })
     window.api.mpvOnTimeUpdate(onMpvTime)
     window.api.mpvOnDuration(onMpvDuration)
     window.api.mpvOnPause(onMpvPause)
@@ -419,6 +438,14 @@ defineExpose({
   width: 100%;
   height: 100%;
   object-fit: contain;
+  display: block;
+}
+
+.video-canvas {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
   display: block;
 }
 

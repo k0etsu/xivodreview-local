@@ -163,18 +163,6 @@ function buildMpvRenderParams(entries: Array<{ type: number; data: Buffer | null
   return buf
 }
 
-// ─── Win32 constants (WS_CHILD management) ────────────────────────────────────
-
-const WS_CHILD          = 0x40000000
-const WS_VISIBLE        = 0x10000000
-const WS_CLIPSIBLINGS   = 0x04000000
-const WS_CLIPCHILDREN   = 0x02000000
-const WS_EX_NOACTIVATE  = 0x08000000
-const GWL_STYLE         = -16
-const SW_HIDE           = 0
-const SW_SHOWNOACTIVATE = 4
-const SWP_NOACTIVATE    = 0x0010
-
 // ─── koffi struct/proto declarations (module-level, Windows only) ─────────────
 // These are pure type registrations — no DLL is touched until getLibmpv() is called.
 
@@ -232,31 +220,11 @@ function getLibmpv(): Record<string, any> {
     // render params passed as void* — caller manually builds binary param array
     render_context_create:              lib.func('int32  __cdecl mpv_render_context_create(void *, uint64, void *)'),
     render_context_render:              lib.func('int32  __cdecl mpv_render_context_render(uint64, void *)'),
+    render_context_update:              lib.func('uint64 __cdecl mpv_render_context_update(uint64)'),
+    render_context_report_swap:         lib.func('void   __cdecl mpv_render_context_report_swap(uint64)'),
     render_context_free:                lib.func('void   __cdecl mpv_render_context_free(uint64)'),
   }
   return _libmpv
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _w32: Record<string, any> | null = null
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function getWin32(): Record<string, any> {
-  if (_w32) return _w32
-  const u32 = koffi.load('user32.dll')
-  const g32 = koffi.load('gdi32.dll')
-  _w32 = {
-    CreateWindowExW: u32.func('uint64 __stdcall CreateWindowExW(uint64, str16, str16, uint32, int, int, int, int, uint64, uint64, uint64, uint64)'),
-    SetWindowPos:    u32.func('bool   __stdcall SetWindowPos(uint64, uint64, int, int, int, int, uint32)'),
-    ShowWindow:      u32.func('bool   __stdcall ShowWindow(uint64, int)'),
-    DestroyWindow:   u32.func('bool   __stdcall DestroyWindow(uint64)'),
-    SetWindowLongW:  u32.func('int32  __stdcall SetWindowLongW(uint64, int32, int32)'),
-    GetWindowLongW:  u32.func('int32  __stdcall GetWindowLongW(uint64, int32)'),
-    GetDC:           u32.func('uint64 __stdcall GetDC(uint64)'),
-    ReleaseDC:       u32.func('int32  __stdcall ReleaseDC(uint64, uint64)'),
-    ValidateRect:    u32.func('bool   __stdcall ValidateRect(uint64, uint64)'),
-    StretchDIBits:   g32.func('int32  __stdcall StretchDIBits(uint64, int, int, int, int, int, int, int, int, void *, void *, uint32, uint32)'),
-  }
-  return _w32
 }
 
 // ─── Controller ───────────────────────────────────────────────────────────────
@@ -269,24 +237,22 @@ export class MpvController extends EventEmitter {
 
   // Windows — pixel buffer for SW render
   private pixelBuf: Buffer | null = null
+  private pixelBufView: Uint8Array | null = null   // typed-array view over pixelBuf, cached per-allocation
+  private renderParamsBuf: Buffer | null = null    // cached render params; rebuilt only on size change
   private pixelW = 0
   private pixelH = 0
   private currentW = 0
   private currentH = 0
+  private framePending = false
+  private needsRerender = false
   // Kept as instance vars so GC doesn't collect them while an async render is in flight
   private paramSizeBuf = Buffer.alloc(8)
-  private paramFmtBuf = Buffer.from('bgr0\0')
+  private paramFmtBuf = Buffer.from('rgba\0')
   private paramStrideBuf = Buffer.alloc(8)
 
   // Seek settle debounce — suppress intermediate time-pos events after a seek
   private lastSeekTime = 0
   private seekSettleTimer: ReturnType<typeof setTimeout> | null = null
-
-  // Track modal/overlay visibility to skip rendering when WS_CHILD is hidden
-  private videoHidden = false
-
-  // Windows — WS_CHILD HWND
-  private containerHwnd: bigint = 0n
 
   // macOS/Linux — child process + IPC + BrowserWindow
   private proc: ChildProcess | null = null
@@ -353,26 +319,6 @@ export class MpvController extends EventEmitter {
     api.observe_property(this.mpvCtx, 1, 'time-pos', MPV_FORMAT_DOUBLE)
     api.observe_property(this.mpvCtx, 2, 'duration',  MPV_FORMAT_DOUBLE)
     api.observe_property(this.mpvCtx, 3, 'pause',     MPV_FORMAT_FLAG)
-
-    // Create WS_CHILD — no WS_EX_TRANSPARENT since mpv no longer owns the HWND
-    const mainHwndBuf = this.mainWindow.getNativeWindowHandle()
-    const mainHwnd: bigint = mainHwndBuf.length >= 8
-      ? mainHwndBuf.readBigUInt64LE(0)
-      : BigInt(mainHwndBuf.readUInt32LE(0))
-
-    const win32 = getWin32()
-    this.containerHwnd = win32.CreateWindowExW(
-      BigInt(WS_EX_NOACTIVATE),
-      'Static', '',
-      WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
-      -640, -360, 640, 360,
-      mainHwnd, 0n, 0n, 0n
-    ) as bigint
-    if (!this.containerHwnd) throw new Error('Failed to create WS_CHILD window')
-
-    // WS_CLIPCHILDREN on the main window so GDI clips around our child area
-    const mainStyle = win32.GetWindowLongW(mainHwnd, GWL_STYLE) as number
-    win32.SetWindowLongW(mainHwnd, GWL_STYLE, mainStyle | WS_CLIPCHILDREN)
 
     // Create SW render context
     // Use buildMpvRenderParams to embed Buffer addresses directly (bypasses koffi struct marshaling)
@@ -471,11 +417,14 @@ export class MpvController extends EventEmitter {
         }
       }
     }
-    // Render every poll tick — safe because this is the Node.js main thread.
-    // Avoids the cross-thread crash that came from using mpv's render update callback
-    // (koffi synchronous callbacks execute on the calling C thread, not the JS thread).
-    if (this.renderCtx && this.fileOpened && this.containerHwnd && !this.videoHidden) {
-      this.renderFrame()
+    // Render when mpv has a new decoded frame, or when the container was resized while paused.
+    // Number() handles koffi returning either BigInt or Number for uint64.
+    if (this.renderCtx && this.fileOpened) {
+      const flags = Number(api.render_context_update(this.renderCtx))
+      if ((flags & 1) || this.needsRerender) {
+        this.needsRerender = false
+        this.renderFrame(api)
+      }
     }
   }
 
@@ -526,68 +475,46 @@ export class MpvController extends EventEmitter {
 
   // ─── libmpv render + GDI paint (Windows) ────────────────────────────────────
 
-  private renderFrame(): void {
-    if (!this.renderCtx || this.videoHidden) return
+  private renderFrame(api: ReturnType<typeof getLibmpv>): void {
+    if (!this.renderCtx || this.framePending) return
     const w = Math.max(1, this.pixelW)
     const h = Math.max(1, this.pixelH)
     const stride = w * 4
 
-    if (!this.pixelBuf || this.pixelBuf.length !== stride * h) {
-      this.pixelBuf = Buffer.alloc(stride * h)
-    }
-
-    // Update instance-variable param buffers (stay alive across the async C call)
+    // Always update size/stride in their buffers — cheap writes, and renderParamsBuf
+    // holds pointers to these buffers so mpv always sees current values.
     this.paramSizeBuf.writeInt32LE(w, 0)
     this.paramSizeBuf.writeInt32LE(h, 4)
     this.paramStrideBuf.writeBigUInt64LE(BigInt(stride), 0)
 
-    // Build params with explicit native Buffer addresses — bypasses koffi struct marshaling
-    const renderParams = buildMpvRenderParams([
-      { type: MPV_RENDER_PARAM_SW_SIZE,    data: this.paramSizeBuf },
-      { type: MPV_RENDER_PARAM_SW_FORMAT,  data: this.paramFmtBuf },
-      { type: MPV_RENDER_PARAM_SW_STRIDE,  data: this.paramStrideBuf },
-      { type: MPV_RENDER_PARAM_SW_POINTER, data: this.pixelBuf! },
-    ])
-
-    const api = getLibmpv()
-    const rc = api.render_context_render(this.renderCtx, renderParams) as number
-    if (rc !== 0) return
-    this.paintToHwnd(w, h, stride)
-  }
-
-  private paintToHwnd(srcW: number, srcH: number, _stride: number): void {
-    if (!this.containerHwnd || !this.pixelBuf) return
-    const win32 = getWin32()
-    const dc = win32.GetDC(this.containerHwnd) as bigint
-    if (!dc) return
-    try {
-      // BITMAPINFOHEADER (40 bytes) + BITMAPINFO padding
-      const bmi = Buffer.alloc(44)
-      bmi.writeUInt32LE(40, 0)      // biSize
-      bmi.writeInt32LE(srcW, 4)     // biWidth
-      bmi.writeInt32LE(-srcH, 8)    // biHeight (negative = top-down scan order)
-      bmi.writeUInt16LE(1, 12)      // biPlanes
-      bmi.writeUInt16LE(32, 14)     // biBitCount
-      // biCompression=0 (BI_RGB), remaining fields default to 0
-
-      const dstW = Math.max(1, this.currentW)
-      const dstH = Math.max(1, this.currentH)
-
-      win32.StretchDIBits(
-        dc,
-        0, 0, dstW, dstH,     // dest rect
-        0, 0, srcW, srcH,     // src rect
-        this.pixelBuf,
-        bmi,
-        0,           // DIB_RGB_COLORS
-        0x00CC0020   // SRCCOPY
-      )
-      // Mark window as clean so the Static wndproc's WM_PAINT doesn't overwrite with white
-      win32.ValidateRect(this.containerHwnd, 0n)
-    } finally {
-      win32.ReleaseDC(this.containerHwnd, dc)
+    if (!this.pixelBuf || this.pixelBuf.length !== stride * h) {
+      this.pixelBuf = Buffer.alloc(stride * h)
+      this.pixelBufView = new Uint8Array(this.pixelBuf.buffer, this.pixelBuf.byteOffset, this.pixelBuf.byteLength)
+      // Rebuild renderParamsBuf: koffi addresses of size/format/stride buffers are stable,
+      // but pixelBuf address changes on every reallocation.
+      this.renderParamsBuf = buildMpvRenderParams([
+        { type: MPV_RENDER_PARAM_SW_SIZE,    data: this.paramSizeBuf },
+        { type: MPV_RENDER_PARAM_SW_FORMAT,  data: this.paramFmtBuf },
+        { type: MPV_RENDER_PARAM_SW_STRIDE,  data: this.paramStrideBuf },
+        { type: MPV_RENDER_PARAM_SW_POINTER, data: this.pixelBuf },
+      ])
     }
+
+    const rc = api.render_context_render(this.renderCtx, this.renderParamsBuf!) as number
+    if (rc !== 0) return
+
+    // Tell mpv a frame was displayed so it can pace decoding to the display clock
+    api.render_context_report_swap(this.renderCtx)
+
+    this.framePending = true
+    this.mainWindow.webContents.send('mpv:frame', {
+      width: w,
+      height: h,
+      data: this.pixelBufView!,
+    })
   }
+
+  frameConsumed(): void { this.framePending = false }
 
   // ─── macOS/Linux IPC event handler ───────────────────────────────────────────
 
@@ -629,8 +556,7 @@ export class MpvController extends EventEmitter {
       this.pixelW = Math.max(1, this.currentW)
       this.pixelH = Math.max(1, this.currentH)
       const escaped = path.replace(/\\/g, '/').replace(/"/g, '\\"')
-      const cmd = `loadfile "${escaped}"`
-      const cmdErr = getLibmpv().command_string(this.mpvCtx, cmd) as number
+      getLibmpv().command_string(this.mpvCtx, `loadfile "${escaped}"`)
     } else {
       this.pauseOnLoad = true
       await this.ipc.send(['loadfile', path, 'replace'])
@@ -710,17 +636,11 @@ export class MpvController extends EventEmitter {
     this.currentH = h
 
     if (process.platform === 'win32') {
-      if (!this.containerHwnd) return
-      if (this.fileOpened) {
+      if (w !== this.pixelW || h !== this.pixelH) {
         this.pixelW = w
         this.pixelH = h
-        this.videoHidden = false   // must clear before ShowWindow so renderFrame() is allowed
-        const win32 = getWin32()
-        win32.ShowWindow(this.containerHwnd, SW_SHOWNOACTIVATE)
-        win32.SetWindowPos(this.containerHwnd, 0n, rx, ry, w, h, SWP_NOACTIVATE)
-        // Paint last frame immediately; ValidateRect inside paintToHwnd suppresses the
-        // subsequent WM_PAINT that ShowWindow queues for the Static wndproc.
-        if (this.renderCtx && this.pixelBuf) this.renderFrame()
+        this.framePending = false  // allow immediate re-render at new size
+        this.needsRerender = true
       }
     } else {
       if (!this.containerWin || this.containerWin.isDestroyed()) return
@@ -730,15 +650,9 @@ export class MpvController extends EventEmitter {
   }
 
   hideVideo(): void {
-    if (process.platform === 'win32') {
-      if (this.containerHwnd) {
-        this.videoHidden = true
-        getWin32().ShowWindow(this.containerHwnd, SW_HIDE)
-      }
-    } else {
-      if (this.containerWin && !this.containerWin.isDestroyed())
-        this.containerWin.setBounds({ x: -9999, y: -9999, width: 640, height: 360 })
-    }
+    if (process.platform === 'win32') return  // canvas mode — DOM handles visibility
+    if (this.containerWin && !this.containerWin.isDestroyed())
+      this.containerWin.setBounds({ x: -9999, y: -9999, width: 640, height: 360 })
   }
 
   // ─── Lifecycle ───────────────────────────────────────────────────────────────
@@ -749,7 +663,6 @@ export class MpvController extends EventEmitter {
       if (this.seekSettleTimer) { clearTimeout(this.seekSettleTimer); this.seekSettleTimer = null }
       if (this.renderCtx) { getLibmpv().render_context_free(this.renderCtx); this.renderCtx = 0n }
       if (this.mpvCtx) { getLibmpv().terminate_destroy(this.mpvCtx); this.mpvCtx = 0n }
-      if (this.containerHwnd) { getWin32().DestroyWindow(this.containerHwnd); this.containerHwnd = 0n }
     } else {
       this.ipc.close()
       try { this.ipc.send(['quit']).catch(() => {}) } catch { /* already closed */ }
