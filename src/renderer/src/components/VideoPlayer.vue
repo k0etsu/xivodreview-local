@@ -32,6 +32,7 @@
 
     <!-- Scrub bar — always rendered so its height is always reserved -->
     <div class="scrub-bar" @click="onScrubBarClick" @mousemove="onScrubHover" @mouseleave="scrubHoverX = null" ref="scrubBar">
+      <div v-if="scrubHoverX !== null" class="scrub-hover-tooltip" :style="{ left: (scrubHoverX + 8) + 'px' }">{{ scrubHoverTime }}</div>
       <div v-if="pullDuration > 0" class="scrub-track">
         <div class="scrub-fill" :style="{ width: scrubPercent + '%' }" />
         <div
@@ -73,10 +74,7 @@
       </button>
 
       <span class="time-display">
-        <template v-if="scrubHoverX !== null">
-          <span class="hover-time">{{ scrubHoverTime }}</span> / {{ formatTime(pullDuration > 0 ? pullDuration / 1000 : duration) }}
-        </template>
-        <template v-else-if="pullDuration > 0">{{ formatTime(Math.max(0, currentTime - pullStartSeconds)) }} / {{ formatTime(pullDuration / 1000) }}</template>
+        <template v-if="pullDuration > 0">{{ formatTime(Math.max(0, currentTime - pullStartSeconds)) }} / {{ formatTime(pullDuration / 1000) }}</template>
         <template v-else>{{ formatTime(currentTime) }} / {{ formatTime(duration) }}</template>
       </span>
 
@@ -525,9 +523,20 @@ defineExpose({
   border-radius: 1px;
   z-index: 1;
 }
-.hover-time {
+.scrub-hover-tooltip {
+  position: absolute;
+  bottom: calc(100% - 6px);
+  transform: translateX(-50%);
+  background: #1a1a1a;
+  border: 1px solid #444;
   color: var(--text-primary);
-  font-weight: 600;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 10;
 }
 
 /* Controls */
