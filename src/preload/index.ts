@@ -58,9 +58,12 @@ contextBridge.exposeInMainWorld('api', {
   mpvOnTracks:      (cb: (t: unknown[]) => void): void   => { ipcRenderer.on('mpv:tracksChange',  (_, t) => cb(t as unknown[])) },
   mpvOnFileLoaded:  (cb: () => void): void               => { ipcRenderer.on('mpv:fileLoaded',    () => cb()) },
   mpvOnFileEnded:   (cb: () => void): void               => { ipcRenderer.on('mpv:fileEnded',     () => cb()) },
+  mpvOnFrame: (cb: (frame: { width: number; height: number; data: Uint8Array }) => void): void =>
+    { ipcRenderer.on('mpv:frame', (_, f) => cb(f as { width: number; height: number; data: Uint8Array })) },
+  mpvFrameConsumed: (): void => ipcRenderer.send('mpv:frameConsumed'),
 
   mpvOffAll: (): void => {
-    for (const ch of ['mpv:timeUpdate','mpv:durationChange','mpv:pauseChange','mpv:tracksChange','mpv:fileLoaded','mpv:fileEnded']) {
+    for (const ch of ['mpv:timeUpdate','mpv:durationChange','mpv:pauseChange','mpv:tracksChange','mpv:fileLoaded','mpv:fileEnded','mpv:frame']) {
       ipcRenderer.removeAllListeners(ch)
     }
   }

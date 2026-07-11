@@ -87,6 +87,30 @@ declare global {
       storeGet: (key: string) => Promise<unknown>
       storeSet: (key: string, value: unknown) => Promise<void>
       storeDelete: (key: string) => Promise<void>
+      getVersion: () => Promise<string>
+      mpvOpenFile: (path: string) => Promise<void>
+      mpvPlay: () => Promise<void>
+      mpvPause: () => Promise<void>
+      mpvTogglePause: () => Promise<void>
+      mpvSeek: (s: number, type: 'absolute' | 'relative') => Promise<void>
+      mpvFrameStep: () => Promise<void>
+      mpvFrameBackStep: () => Promise<void>
+      mpvSetVolume: (level: number) => Promise<void>
+      mpvAddVolume: (delta: number) => Promise<void>
+      mpvSetMute: (muted: boolean) => Promise<void>
+      mpvSetAudioTrack: (id: number) => Promise<void>
+      mpvCommand: (args: unknown[]) => Promise<unknown>
+      mpvSetHidden: (hidden: boolean) => Promise<void>
+      mpvSetViewportBounds: (bounds: { left: number; top: number; width: number; height: number }) => void
+      mpvOnTimeUpdate: (cb: (t: number) => void) => void
+      mpvOnDuration: (cb: (d: number) => void) => void
+      mpvOnPause: (cb: (p: boolean) => void) => void
+      mpvOnTracks: (cb: (t: unknown[]) => void) => void
+      mpvOnFileLoaded: (cb: () => void) => void
+      mpvOnFileEnded: (cb: () => void) => void
+      mpvOnFrame: (cb: (frame: { width: number; height: number; data: Uint8Array }) => void) => void
+      mpvFrameConsumed: () => void
+      mpvOffAll: () => void
     }
   }
 }
