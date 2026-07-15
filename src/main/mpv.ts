@@ -620,6 +620,10 @@ export class MpvController extends EventEmitter {
   async command(args: unknown[]): Promise<unknown> {
     if (process.platform === 'win32') {
       getLibmpv().command_string(this.mpvCtx, args.map(String).join(' '))
+      // 'stop' unloads the file but fileOpened previously stayed true forever,
+      // so the render loop kept repainting the last decoded frame (e.g. on
+      // resize) instead of going idle — reset it so rendering actually halts.
+      if (args[0] === 'stop') this.fileOpened = false
       return undefined
     }
     return this.ipc.send(args)

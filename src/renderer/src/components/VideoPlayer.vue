@@ -358,6 +358,12 @@ watch(() => props.src, (newSrc) => {
   playing.value = false
   audioTracks.value = []
   currentAudioTrackIndex.value = 0
+  if (!newSrc && props.backend === 'mpv') {
+    // Frames are painted onto the canvas via putImageData; clear it so the
+    // last frame doesn't stay frozen on screen after the video is unloaded.
+    const canvas = videoCanvas.value
+    if (canvas && canvasCtx) canvasCtx.clearRect(0, 0, canvas.width, canvas.height)
+  }
   // HTML5: :src binding on <video> triggers load automatically
   if (newSrc && props.backend === 'mpv') window.api.mpvOpenFile(newSrc).catch(() => {})
 })
@@ -365,12 +371,12 @@ watch(() => props.src, (newSrc) => {
 // ─── Lifecycle ────────────────────────────────────────────────────────────────
 
 let resizeObserver: ResizeObserver | null = null
+let canvasCtx: CanvasRenderingContext2D | null = null
 
 onMounted(() => {
   wrapper.value?.focus()
 
   if (props.backend === 'mpv') {
-    let canvasCtx: CanvasRenderingContext2D | null = null
     window.api.mpvOnFrame(({ width, height, data }) => {
       const canvas = videoCanvas.value
       if (!canvas) { window.api.mpvFrameConsumed(); return }
